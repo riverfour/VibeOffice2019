@@ -1,0 +1,674 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import '../../public/common/xml.js';
+import '../../public/common/opc.js';
+import '../../public/common/opc-order.js';
+import '../../public/common/zip.js';
+import '../../public/common/dml.js';
+
+const K = L.opc, N = K.NS;
+const rel = (id, type, target, external = false) => `<Relationship Id="${id}" Type="${type}" Target="${K.esc(target)}"${external ? ' TargetMode="External"' : ''}/>`;
+const rels = content => `<Relationships xmlns="${N.pkg}">${content}</Relationships>`;
+const types = '<Types xmlns="' + N.ct + '"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="bin" ContentType="application/octet-stream"/></Types>';
+async function pkg(parts) {
+  const blob = await L.zip.write(Object.entries({ '[Content_Types].xml': types, ...parts }).map(([name, data]) => ({ name, data })));
+  return K.open(new Uint8Array(await blob.arrayBuffer()));
+}
+const text = data => typeof data === 'string' ? data : new TextDecoder().decode(data);
+const kid = (el, name) => el.children.find(c => c.localName === name);
+const children = xml => K.parse(xml).children.map(e => e.localName);
+
+test('list copies get fresh eight-digit nsids while unchanged numbering retains its source spelling', async () => {
+  const part = 'word/numbering.xml', xml = `<w:numbering xmlns:w="${N.w}"><w:abstractNum w:abstractNumId="1"><w:nsid w:val="FFFFFFFE"/></w:abstractNum><w:abstractNum w:abstractNumId="2"><w:nsid w:val="ffffffff"/></w:abstractNum></w:numbering>`;
+  const p = await pkg({ [part]: xml }), w = new K.Writer(p), f = K.fragment(p.xml(part).children[1], { pkg: p, part });
+  const nsid = value => kid(K.parse(value), 'nsid').getAttribute('w:val');
+  assert.equal(nsid(w.emit(f, part)), 'ffffffff');
+  const a = K.duplicate(f), b = K.duplicate(f), first = nsid(w.emit(a, part)), second = nsid(w.emit(b, part));
+  assert.match(first, /^[0-9A-F]{8}$/); assert.match(second, /^[0-9A-F]{8}$/);
+  assert.equal(new Set(['FFFFFFFE', 'FFFFFFFF', first, second]).size, 4);
+  assert.equal(nsid(w.emit(JSON.parse(JSON.stringify(a)), part)), first, 'history retains the copied identity');
+});
+
+test('identity pre-scan ignores revision words in ordinary spreadsheet and slide text', async () => {
+  const sheet = `<worksheet xmlns="${N.s}"><sheetData><row><c><is><t>ins del moveFrom moveTo</t></is></c></row></sheetData></worksheet>`;
+  const strings = `<sst xmlns="${N.s}"><si><t>del documento</t></si></sst>`;
+  const slide = `<p:sld xmlns:p="${N.p}" xmlns:a="${N.a}"><a:t>del libro</a:t></p:sld>`;
+  const word = `<q:document xmlns:q="${N.w}"><q:ins q:id="99"/></q:document>`;
+  const p = await pkg({ 'xl/worksheets/sheet1.xml': sheet, 'xl/sharedStrings.xml': strings, 'ppt/slides/slide1.xml': slide, 'word/document.xml': word });
+  const parse = K.parse, seen = [];
+  try {
+    K.parse = xml => { seen.push(xml); return parse(xml); };
+    const w = new K.Writer(p);
+    assert(!seen.some(xml => [sheet, strings, slide].includes(xml)), 'ordinary words must not force a DOM parse');
+    assert(seen.includes(word)); assert.equal(w.ids.fresh('document', 'revision'), '100');
+  } finally { K.parse = parse; }
+});
+
+test('GUID copies remap selected definitions and references together, preserving user text and shared persons', () => {
+  const a = '{12345678-1234-4234-8234-123456789ABC}', b = '{12345678-1234-4234-8234-123456789ABD}';
+  const person = '{12345678-1234-4234-8234-123456789ABE}', guidMap = {};
+  const xml = `<thread id="${a}" personId="${person}" uri="${a}" xmlns:r="${N.rel}" r:id="${a}"><reply id="${b}" parentId="${a.toLowerCase()}"/><text>${a}</text><unknown value="${a}"/></thread>`;
+  const source = { id: a, text: a, reply: { id: b, parent: a }, personId: person,
+    fragment: { xml, deps: [], ids: [], source: 'source', part: 'thread.xml' } };
+  const options = { guidValues: [a, b], guidFields: ['id', 'parent', 'personId'] };
+  const copy = K.duplicate(source, { ...options, guidMap });
+  assert.notEqual(copy.id, source.id); assert.equal(copy.reply.parent, copy.id);
+  assert.equal(copy.personId, person); assert.equal(copy.text, a);
+  const tree = K.parse(copy.fragment.xml);
+  assert.equal(tree.getAttribute('id'), copy.id);
+  assert.equal(tree.children[0].getAttribute('parentId'), copy.id);
+  assert.equal(tree.children[0].getAttribute('id'), copy.reply.id);
+  assert.equal(tree.getAttribute('personId'), person); assert.equal(tree.getAttribute('uri'), a);
+  assert.equal(tree.getAttributeNS(N.rel, 'id'), a, 'relationships retain their own identity space');
+  assert.equal(tree.children[1].textContent, a); assert.equal(tree.children[2].getAttribute('value'), a);
+  assert.equal(K.remapGuids(xml, guidMap), copy.fragment.xml);
+  assert.deepEqual(JSON.parse(JSON.stringify(copy)), copy);
+  const second = K.duplicate(copy, { ...options, guidValues: [copy.id, copy.reply.id] });
+  assert.notEqual(second.id, copy.id); assert.equal(second.reply.parent, second.id);
+  assert.equal(K.parse(second.fragment.xml).children[0].getAttribute('parentId'), second.id);
+  assert.equal(source.fragment.xml, xml);
+});
+
+test('XML patches retain insertion order at shared boundaries and reject overlaps', () => {
+  assert.equal(K.patch('abcdef', [
+    { start: 1, end: 3, value: 'B' }, { start: 1, end: 1, value: 'I' },
+    { start: 4, end: 6, value: 'E' }, { start: 6, end: 6, value: '!' },
+  ]), 'aIBdE!');
+  assert.equal(K.patch('ab', [{ start: 1, end: 1, value: '1' }, { start: 1, end: 1, value: '2' }]), 'a21b');
+  assert.throws(() => K.patch('abc', [{ start: 0, end: 2, value: '' }, { start: 1, end: 3, value: '' }]), /Overlapping/);
+});
+
+test('feature notices describe actual assembled losses, survive drafts, and clear on a preserving save', async () => {
+  const original = `<w:document xmlns:w="${N.w}"><w:body><w:smartTag><w:p><w:r><w:t>Retained text</w:t></w:r></w:p></w:smartTag></w:body></w:document>`;
+  const converted = `<w:document xmlns:w="${N.w}"><w:body><w:p><w:r><w:t>Retained text</w:t></w:r></w:p></w:body></w:document>`;
+  const source = await pkg({ 'doc.xml': original }), doc = {};
+  const options = { accepts: el => el.namespaceURI === N.w, classify: el => el.namespaceURI === N.w && el.localName === 'smartTag' ? 'tags' : null, labels: { tags: 'Smart tags were converted to ordinary content' } };
+  const output = xml => {
+    const pack = K.output(source, { doc, audit: w => K.reportFeatures(w, options) });
+    pack.bind('doc.xml', 'doc.xml'); pack.put('doc.xml', xml, 'application/xml');
+    assert.equal(K.pendingLosses(doc).length, 0, 'no notice before the file has been assembled');
+    pack.finish();
+  };
+  output(original); assert.deepEqual(doc.losses, []);
+  output(converted); assert.equal(doc.losses.length, 1);
+  assert.equal(doc.losses[0].where, 'doc.xml');
+  const state = K.lossState(doc), recovered = {};
+  K.recoverLosses(recovered, state); assert.equal(K.pendingLosses(recovered).length, 1);
+  output(original); assert.equal(K.pendingLosses(doc).length, 0, 'cancelled conversion does not poison a preserving save');
+  output(converted); K.acknowledge(doc, doc.losses);
+  assert.equal(K.pendingLosses(doc).length, 0);
+});
+
+test('one object notice covers its opaque dependency graph without hiding unrelated losses', async () => {
+  const source = await pkg({
+    'frame.xml': '<payload/>', 'leaf.xml': '<payload/>', 'content.xml': '<content/>', 'unrelated.xml': '<payload/>',
+    '_rels/.rels': rels(rel('rId1', N.rel + '/officeDocument', 'content.xml') + rel('rId2', N.rel + '/customXml', 'frame.xml')),
+    '_rels/frame.xml.rels': rels(rel('rId1', N.rel + '/customXml', 'leaf.xml') + rel('rId2', N.rel + '/slide', 'content.xml')),
+    '_rels/leaf.xml.rels': rels(rel('rId1', N.rel + '/customXml', 'frame.xml')),
+    '_rels/content.xml.rels': rels(rel('rId1', N.rel + '/customXml', 'unrelated.xml')),
+  }), doc = {}, w = new K.Writer(source, { doc });
+  w.claim('content.xml', 'regenerated'); w.put('content.xml', '<content/>', 'application/xml');
+  assert.equal(w.coverLoss('missing-notice', ['unrelated.xml']), false);
+  w.loss({ id: 'converted-frame', what: 'The object was converted.', where: 'content.xml', action: 'conversion' });
+  assert.equal(w.coverLoss('converted-frame', ['frame.xml']), true);
+  const losses = w.finish().dropped;
+  assert.equal(losses.length, 2);
+  assert.deepEqual(losses.filter(e => e.id.startsWith('unreferenced:')).map(e => e.where), ['unrelated.xml']);
+  const restored = new K.Writer(source, { doc }); restored.carry(source, 'frame.xml');
+  assert.deepEqual(restored.finish().dropped, [], 'undo/recovery recomputes both the notice and its coverage');
+});
+
+test('rewritten parts hoist fragment declarations and Ignorable once, retaining scoped QName meanings', () => {
+  const xml = `<w:document xmlns:w="${N.w}" xmlns:mc="${N.mc}" xmlns:x="urn:one" mc:Ignorable="x"><w:p xmlns:w="${N.w}" xmlns:z="urn:new" mc:Ignorable="z"><x:outer xmlns:x="urn:two" mc:Ignorable="x"><x:reset xmlns:x="urn:one"/><z:payload xmlns:z="urn:new"/></x:outer></w:p></w:document>`;
+  const result = K.hoistNamespaces(xml), parsed = K.parse(result);
+  assert.equal(result.match(/xmlns:w=/g).length, 1);
+  assert.equal(result.match(/xmlns:z=/g).length, 1);
+  assert.equal(result.match(/:Ignorable=/g).length, 1);
+  assert.equal(parsed.getElementsByTagName('x:outer')[0].namespaceURI, 'urn:two');
+  assert.equal(parsed.getElementsByTagName('x:reset')[0].namespaceURI, 'urn:one');
+  assert.equal(parsed.getElementsByTagName('z:payload')[0].namespaceURI, 'urn:new');
+  const ignored = parsed.getAttributeNS(N.mc, 'Ignorable').split(' ').map(p => parsed.lookupNamespaceURI(p));
+  assert.deepEqual(new Set(ignored), new Set(['urn:one', 'urn:new', 'urn:two']));
+  assert.equal(K.hoistNamespaces(result), result);
+});
+
+test('namespace hoisting returns parts with nothing to hoist unchanged, without parsing them', () => {
+  const head = `<?xml version="1.0"?>\n<!-- a > b --><?pi x?><x:worksheet xmlns:x="${N.s}" xmlns:mc="${N.mc}" xmlns:a="urn:a" title="1 > 0" mc:Ignorable="a">`;
+  const plain = head + '<x:sheetData><x:row r="1"/></x:sheetData></x:worksheet>';
+  assert.equal(K.hoistNamespaces(plain), plain);
+  assert.equal(K.hoistNamespaces(plain.replace('<x:row r="1"/>', '<x:row r="1"/><x:c>&lt;')), plain.replace('<x:row r="1"/>', '<x:row r="1"/><x:c>&lt;'), 'malformed text is not parsed on the fast path');
+  const inner = head + '<x:sheetData><x:row xmlns:x="' + N.s + '" r="1"/></x:sheetData></x:worksheet>';
+  assert.equal(K.hoistNamespaces(inner).match(/xmlns:x=/g).length, 1, 'inner declarations still hoist');
+  const spaced = plain.replace('mc:Ignorable="a"', 'mc:Ignorable=" a "');
+  assert.match(K.hoistNamespaces(spaced), /mc:Ignorable="a"/, 'a root Ignorable list is still normalised');
+});
+test('namespace hoisting preserves default resets, attribute aliases, other MC properties and opaque bytes', async () => {
+  const xml = `<root xmlns="urn:root" xmlns:k="${N.mc}"><a xmlns="urn:child" xmlns:n="urn:new" k:Ignorable="n" k:ProcessContent="n:payload"><b xmlns="urn:root"/><n:payload/></a><unqualified xmlns=""/></root>`;
+  const result = K.hoistNamespaces(xml), parsed = K.parse(result);
+  assert.equal(parsed.children[0].getAttributeNS(N.mc, 'Ignorable'), 'n', 'ProcessContent has its required local Ignorable binding');
+  assert.equal(parsed.children[0].namespaceURI, 'urn:child');
+  assert.equal(parsed.children[0].children[0].namespaceURI, 'urn:root');
+  assert.equal(parsed.children[1].namespaceURI, '');
+  assert.equal(parsed.children[0].getAttributeNS(N.mc, 'ProcessContent'), 'n:payload');
+  assert.equal(parsed.children[0].lookupNamespaceURI('n'), 'urn:new');
+  const source = await pkg({ 'kept.xml': xml });
+  const out = K.output(source); out.bind('kept.xml', 'kept.xml', 'opaque'); out.put('kept.xml', xml);
+  assert.equal(text(out.writer.parts.get('kept.xml')), xml);
+  const fresh = K.output(null); fresh.put('new.xml', xml);
+  assert.equal(text(fresh.writer.parts.get('new.xml')), result);
+});
+
+test('compatibility attributes retain one expanded identity across prefix aliases and repeated saves', () => {
+  const source = `<w:document xmlns:w="${N.w}" xmlns:mc="${N.mc}" xmlns:ns1="${N.mc}" xmlns:w14="urn:w14" xmlns:wp14="urn:wp14" mc:Ignorable="w14" mc:ProcessContent="w14:outer"><w:p ns1:Ignorable="wp14" ns1:ProcessContent="wp14:inner"/></w:document>`;
+  for (const serialize of [K.raw, K.serialize]) {
+    let element = K.parse(source).children[0];
+    for (let save = 0; save < 3; save++) {
+      const xml = serialize(element), parsed = K.parse(xml);
+      const compatibility = Array.from(parsed.attributes).filter(a => a.prefix && parsed.lookupNamespaceURI(a.prefix) === N.mc);
+      assert.equal(compatibility.length, 2);
+      assert.equal(parsed.getAttributeNS(N.mc, 'Ignorable'), 'w14 wp14');
+      assert.equal(parsed.getAttributeNS(N.mc, 'ProcessContent'), 'w14:outer wp14:inner');
+      assert.ok(xml.includes('ns1:Ignorable='));
+      element = K.parse(`<w:document xmlns:w="${N.w}" xmlns:mc="${N.mc}" xmlns:w14="urn:w14" mc:Ignorable="w14">${xml}</w:document>`).children[0];
+    }
+    const rebound = K.parse(`<outer xmlns:mc="${N.mc}" xmlns:w14="urn:w14" mc:Ignorable="w14"><inner xmlns:mc="urn:unrelated"/></outer>`).children[0];
+    const result = K.parse(serialize(rebound));
+    assert.equal(result.getAttributeNS(N.mc, 'Ignorable'), 'w14');
+    assert.equal(result.lookupNamespaceURI('mc'), 'urn:unrelated');
+  }
+});
+
+test('new revision IDs avoid preserved changes and copied changes get distinct IDs', async () => {
+  const source = `<w:rPr xmlns:w="${N.w}"><w:rPrChange w:id="2147483647" w:author="Author"><w:rPr/></w:rPrChange></w:rPr>`;
+  const p = await pkg({ 'word/document.xml': source }), w = new K.Writer(p);
+  const fragment = K.fragment(p.xml('word/document.xml'), { pkg: p, part: 'word/document.xml' });
+  const id = w.ids.fresh('document', 'revision');
+  assert.equal(id, '1');
+  assert.match(w.emit(fragment, 'word/document.xml'), /w:id="2147483647"/);
+  assert.match(w.emit(K.duplicate(fragment), 'word/document.xml'), /w:id="2"/);
+});
+
+test('revision-only parts reserve later IDs before emitting a copied section', async () => {
+  const source = `<w:body xmlns:w="${N.w}"><w:sectPr><w:sectPrChange w:id="10" w:author="Author"><w:sectPr/></w:sectPrChange></w:sectPr><w:sectPr><w:sectPrChange w:id="11" w:author="Author"><w:sectPr/></w:sectPrChange></w:sectPr></w:body>`;
+  const p = await pkg({ 'word/document.xml': source }), w = new K.Writer(p);
+  const fragments = p.xml('word/document.xml').children.map(e => K.fragment(e, { pkg: p, part: 'word/document.xml' }));
+  assert.match(w.emit(fragments[0], 'word/document.xml'), /w:id="10"/);
+  assert.match(w.emit(K.duplicate(fragments[1]), 'word/document.xml'), /w:id="12"/);
+  assert.match(w.emit(fragments[1], 'word/document.xml'), /w:id="11"/);
+  assert.equal(w.ids.fresh('document', 'revision'), '13');
+});
+
+test('picture-bullet definitions and copied level references share their numbering identity', async () => {
+  const source = `<w:numbering xmlns:w="${N.w}"><w:numPicBullet w:numPicBulletId="4"><w:pict/></w:numPicBullet><w:lvlPicBulletId w:val="4"/></w:numbering>`;
+  const p = await pkg({ 'word/numbering.xml': source }), w = new K.Writer(p);
+  const [definition, reference] = p.xml('word/numbering.xml').children.map(e => K.fragment(e, { pkg: p, part: 'word/numbering.xml' }));
+  const copied = K.duplicate({ definition, reference });
+  assert.match(w.emit(copied.reference, 'word/numbering.xml'), /w:val="5"/);
+  assert.match(w.emit(copied.definition, 'word/numbering.xml'), /w:numPicBulletId="5"/);
+  assert.match(w.emit(definition, 'word/numbering.xml'), /w:numPicBulletId="4"/);
+  assert.match(w.emit(reference, 'word/numbering.xml'), /w:val="4"/);
+  w.ids.reserve('numbering', 'numPicBulletId', '2147483647');
+  assert.equal(w.ids.fresh('numbering', 'numPicBulletId'), '1');
+});
+
+test('baseline bytes are immutable; the graph retains full types, sharing, cycles and external URLs', async () => {
+  const p = await pkg({ 'a.xml': '<a/>', 'b.xml': '<b/>', 'shared.bin': new Uint8Array([3, 4]),
+    '_rels/.rels': rels(rel('rId40', N.rel + '/officeDocument', 'a.xml')),
+    '_rels/a.xml.rels': rels(rel('rId1', 'urn:vendor/type', 'b.xml') + rel('alias', N.rel + '/image', 'shared.bin') + rel('web', N.rel + '/hyperlink', 'https://example.invalid/a?b=1&c=2', true)),
+    '_rels/b.xml.rels': rels(rel('back', 'urn:vendor/back', 'a.xml') + rel('same', 'urn:vendor/bytes', 'shared.bin')) });
+  assert.equal(p.main, 'a.xml'); assert.equal(p.rels('a.xml')[0].type, 'urn:vendor/type');
+  assert.deepEqual(new Set(K.subtree(p, 'a.xml').parts), new Set(['a.xml', 'b.xml', 'shared.bin']));
+  const bytes = p.bytes('shared.bin'); bytes[0] = 99; assert.equal(p.bytes('shared.bin')[0], 3);
+  assert.throws(() => { p.rels('a.xml')[0].target = 'wrong.xml'; }, TypeError);
+  const w = new K.Writer(p); w.carryRels(p, '', ''); const result = w.finish();
+  for (const name of ['a.xml', 'b.xml', 'shared.bin', '_rels/a.xml.rels', '_rels/b.xml.rels']) assert.deepEqual(new Uint8Array(result.files.find(f => f.name === name).data), p.bytes(name));
+  assert.match(w.rels('').xml(), /Id="rId40"/); assert.equal(result.dropped.length, 0);
+});
+
+test('opaque backlinks follow a renamed regenerated part; unfilled claims fail explicitly', async () => {
+  const p = await pkg({ 'a.xml': '<a/>', 'b.xml': '<b/>', '_rels/.rels': rels(rel('rId9', N.rel + '/officeDocument', 'a.xml')),
+    '_rels/a.xml.rels': rels(rel('rId2', 'urn:child', 'b.xml')), '_rels/b.xml.rels': rels(rel('rId7', 'urn:back', 'a.xml')) });
+  const w = new K.Writer(p); w.claim('a.xml', 'regenerated', 'new.xml'); w.carryRels(p, '', ''); w.carryRels(p, 'a.xml', 'new.xml');
+  assert.throws(() => w.finish(), /Unwritten relationship target/);
+  w.put('new.xml', '<a edited="1"/>', 'application/xml'); const files = w.finish().files;
+  assert.match(text(files.find(f => f.name === '_rels/b.xml.rels').data), /Id="rId7"[^>]+Target="new.xml"/);
+  assert.equal(text(files.find(f => f.name === 'b.xml').data), '<b/>');
+  assert.throws(() => w.claim('b.xml', 'regenerated', 'new.xml'), /collision/);
+});
+
+test('copying an opaque notes page redirects its slide backlink and shares immutable targets', async () => {
+  const p = await pkg({ 'slide.xml': '<slide/>', 'notes.xml': '<notes/>', 'master.xml': '<master/>',
+    '_rels/notes.xml.rels': rels(rel('slide', N.rel + '/slide', 'slide.xml') + rel('master', N.rel + '/notesMaster', 'master.xml')) });
+  const w = new K.Writer(p); w.claim('slide.xml'); w.put('slide.xml', '<slide/>', 'application/xml'); w.put('copy.xml', '<slide/>', 'application/xml');
+  w.carry(p, 'notes.xml'); w.copyPart(p, 'notes.xml', 'copied-notes.xml', { 'slide.xml': 'copy.xml' });
+  assert.deepEqual(w.parts.get('copied-notes.xml'), p.bytes('notes.xml'));
+  assert.match(text(w.parts.get('_rels/copied-notes.xml.rels')), /Id="slide"[^>]+Target="copy.xml"/);
+  assert.match(text(w.parts.get('_rels/copied-notes.xml.rels')), /Id="master"[^>]+Target="master.xml"/);
+  assert.doesNotThrow(() => w.finish());
+});
+
+test('failed carry leaves no partial output and respects regenerated dependency boundaries', async () => {
+  const p = await pkg({ 'good.xml': '<good/>', 'broken.xml': `<broken xmlns:r="${N.rel}" r:id="two"/>`,
+    '_rels/broken.xml.rels': rels(rel('one', 'urn:child', 'good.xml') + rel('two', 'urn:child', 'absent.xml')) });
+  const w = new K.Writer(p), names = [...w.names], mapping = [...w.mapping];
+  assert.throws(() => w.carry(p, 'broken.xml'), /Missing dependency: absent.xml/);
+  assert.equal(w.parts.size, 0); assert.equal(w.carried.size, 0);
+  assert.deepEqual([...w.names], names); assert.deepEqual([...w.mapping], mapping);
+  w.claim('broken.xml'); w.put('broken.xml', '<converted/>', 'application/xml');
+  assert.equal(w.carry(p, 'broken.xml'), 'broken.xml');
+  assert.equal(w.parts.get('broken.xml'), '<converted/>');
+  assert.doesNotThrow(() => w.finish());
+});
+
+test('rId allocation reserves original gaps and preserves aliases for one shared target', () => {
+  const r = new K.Rels([{ id: 'rId83', type: 'urn:a', target: 'a.xml' }, { id: 'rId2', type: 'urn:a', target: 'a.xml' }]);
+  assert.equal(r.add('urn:a', 'a.xml'), 'rId83');
+  assert.equal(r.add('urn:a', 'a.xml', false, 'rId2'), 'rId2');
+  assert.equal(r.add('urn:other', 'b.xml'), 'rId84');
+  assert.throws(() => r.add('urn:wrong', 'x.xml', false, 'rId2'), /rebound/);
+});
+
+test('output aliases preserve opaque relationship IDs without overwriting their graphs', async () => {
+  const p = await pkg({ 'original/main.xml': '<main/>', 'original/theme.xml': '<theme/>', 'original/data.xml': '<data/>',
+    '_rels/.rels': rels(rel('main40', N.rel + '/officeDocument', 'original/main.xml')),
+    'original/_rels/main.xml.rels': rels(rel('theme7', N.rel + '/theme', '/original/theme.xml')),
+    'original/_rels/theme.xml.rels': rels(rel('original-id', 'urn:data', 'data.xml')) });
+  const out = K.output(p, { consumes: (base, r) => r.type === N.rel + '/officeDocument' });
+  out.bind('generated/main.xml', p.main);
+  out.bind('generated/theme.xml', 'original/theme.xml', 'opaque');
+  out.rels('').add(N.rel + '/officeDocument', 'generated/main.xml');
+  assert.equal(out.rels('generated/main.xml').add(N.rel + '/theme', 'theme.xml'), 'theme7');
+  // A native writer can have prepared a different rels file before ownership
+  // decides to carry the opaque target. It must not replace the carried graph.
+  out.rels('generated/theme.xml').add('urn:wrong', 'absent.xml');
+  out.put('generated/theme.xml', '<wrong/>');
+  out.put('generated/main.xml', '<main edited="1"/>', 'application/xml');
+  const result = out.finish();
+  assert.equal(result.dropped.length, 0);
+  assert.equal(out.writer.rels('original/main.xml').list.length, 1);
+  assert.deepEqual(out.writer.parts.get('original/theme.xml'), p.bytes('original/theme.xml'));
+  assert.deepEqual(out.writer.parts.get('original/_rels/theme.xml.rels'), p.bytes('original/_rels/theme.xml.rels'));
+  assert.equal(out.writer.parts.has('generated/main.xml'), false);
+});
+
+test('draft recovery retains unacknowledged conversions after the source parts are gone', () => {
+  const original = {}, w = new K.Writer(null, { doc: original });
+  w.loss({ id: 'converted:1', what: 'Converted object', where: 'Object 1', action: 'conversion' });
+  K.loss(original, { id: 'edited:2', what: 'Edited object', action: 'drop' });
+  K.acknowledge(original, original.losses.slice(1));
+  const recovered = {};
+  K.recoverLosses(recovered, JSON.parse(JSON.stringify(K.lossState(original))));
+  new K.Writer(null, { doc: recovered });
+  assert.equal(recovered.losses.length, 2);
+  assert.deepEqual(K.pendingLosses(recovered).map(e => e.id), ['converted:1']);
+});
+
+test('rewritten roots retain their original entity prolog and Strict namespace form', () => {
+  const original = '<?xml version="1.0"?><!DOCTYPE root [<!ENTITY name "A &amp; B">]><?before keep?><root>&name;</root><?after keep?>';
+  const output = K.partXML(original, '<root changed="1">&name;</root>');
+  assert.equal(output, original.replace('<root>', '<root changed="1">'));
+  const strict = K.strictXML(`<w:document xmlns:w="${N.w}" xmlns:r="${N.rel}"><w:body note="${N.w}"/></w:document>`);
+  assert.match(strict, /xmlns:w="http:\/\/purl.oclc.org\/ooxml\/wordprocessingml\/main"/);
+  assert.match(strict, /xmlns:r="http:\/\/purl.oclc.org\/ooxml\/officeDocument\/relationships"/);
+  assert.ok(strict.includes(`note="${N.w}"`)); // ordinary values are not URI declarations
+});
+
+test('Strict carry converts namespaces and DrawingML percentages, preserving other values and binary bytes', async () => {
+  const a = 'http://purl.oclc.org/ooxml/drawingml/main', w = 'http://purl.oclc.org/ooxml/wordprocessingml/main';
+  const source = `<w:document xmlns:w="${w}" xmlns:a="${a}" note="${w}"><w:body><a:alpha val="37.5%"/><a:lumOff val="-10%"/><a:graphicData uri="${a}"/><w:p w:rsidR="1234"/></w:body></w:document>`;
+  const bytes = new Uint8Array([0, 255, 17]);
+  const p = await pkg({ 'word/document.xml': source, 'word/theme.xml': `<a:theme xmlns:a="${a}"/>`, 'word/embedded.bin': bytes,
+    '_rels/.rels': rels(rel('rId1', N.strictRel + '/officeDocument', 'word/document.xml')),
+    'word/_rels/document.xml.rels': rels(rel('rId7', N.strictRel + '/theme', 'theme.xml') + rel('rId8', N.strictRel + '/oleObject', 'embedded.bin')) });
+  const doc = {}, writer = new K.Writer(p, { doc }); writer.carryRels(p, '');
+  const files = new Map(writer.finish().files.map(f => [f.name, f.data]));
+  const xml = text(files.get('word/document.xml'));
+  assert.match(xml, /val="37500"/); assert.match(xml, /val="-10000"/);
+  assert.ok(xml.includes(`note="${w}"`)); assert.ok(xml.includes(`xmlns:w="${N.w}"`));
+  assert.ok(xml.includes(`uri="${N.a}"`)); assert.ok(!text(files.get('word/theme.xml')).includes('purl.oclc.org'));
+  assert.ok(!text(files.get('word/_rels/document.xml.rels')).includes('purl.oclc.org'));
+  assert.deepEqual(files.get('word/embedded.bin'), bytes);
+  assert.equal(doc.losses.filter(e => e.id === 'ooxml:strict-to-transitional').length, 1);
+  K.acknowledge(doc, doc.losses);
+  const second = new K.Writer(p, { doc }); second.carryRels(p, ''); second.finish();
+  assert.equal(K.pendingLosses(doc).length, 0);
+  const untouched = `<a:x xmlns:a="${N.a}" note="${w}" val="37.5%"/>`;
+  assert.equal(K.transitionalXML(untouched), untouched);
+});
+
+test('Strict Word vocabulary converts table flags, tab measures and relative drawing sizes', () => {
+  const w = 'http://purl.oclc.org/ooxml/wordprocessingml/main';
+  const xml = `<w:p xmlns:w="${w}" xmlns:sl="http://purl.oclc.org/ooxml/schemaLibrary/main" xmlns:wp14="${K.KNOWN_NS.wp14}"><w:pPr><w:cnfStyle w:firstRow="true" w:lastRow="0" w:firstRowLastColumn="1"/><w:tabs><w:tab w:pos="85.05pt"/></w:tabs></w:pPr><wp14:pctWidth>12.5%</wp14:pctWidth><w:r><w:t>12.5%</w:t></w:r></w:p>`;
+  const out = K.transitionalXML(xml);
+  assert.match(out, /w:val="100000001000"/); assert.match(out, /w:pos="1701"/);
+  assert.match(out, /<wp14:pctWidth>12500<\/wp14:pctWidth>/); assert.match(out, /<w:t>12.5%<\/w:t>/);
+  assert.ok(out.includes('http://schemas.openxmlformats.org/schemaLibrary/2006/main'));
+});
+
+test('Strict regeneration and carried references both use Transitional output with original rIds', async () => {
+  const sw = 'http://purl.oclc.org/ooxml/wordprocessingml/main';
+  const p = await pkg({ 'word/document.xml': `<w:document xmlns:w="${sw}"/>`, 'word/theme.xml': '<theme/>',
+    '_rels/.rels': rels(rel('rId3', N.strictRel + '/officeDocument', 'word/document.xml')),
+    'word/_rels/document.xml.rels': rels(rel('rId17', N.strictRel + '/theme', 'theme.xml')) });
+  const o = K.output(p); o.bind('word/document.xml', p.main);
+  assert.equal(o.rels('').add(N.rel + '/officeDocument', 'word/document.xml'), 'rId3');
+  o.put('word/document.xml', `<w:document xmlns:w="${N.w}"><w:body/></w:document>`, p.type(p.main));
+  const files = new Map(o.finish().files.map(f => [f.name, text(f.data)]));
+  assert.ok(files.get('word/document.xml').includes(N.w));
+  assert.ok(files.get('word/_rels/document.xml.rels').includes('Id="rId17"'));
+  assert.ok(!files.get('word/_rels/document.xml.rels').includes('purl.oclc.org'));
+});
+
+test('identity scopes survive transfers, explicit index maps and bounded slide/master ranges', () => {
+  const ids = new K.Identities(); ids.reserve('slide2.xml', 'shape', '99');
+  assert.equal(ids.resolve('pkg', 'slide1.xml', 'shape', '2', { primary: 'pkg', scope: 'slide2.xml' }), '100');
+  assert.equal(ids.resolve('pkg', 'slide1.xml', 'shape', '2', { primary: 'pkg', scope: 'slide2.xml' }), '100');
+  ids.bind('pkg', 'styles', 'dxf', '3', '7');
+  assert.equal(ids.resolve('pkg', 'styles', 'dxf', '3', { primary: 'pkg' }), '7');
+  assert.equal(ids.fresh('presentation', 'sldId'), '256');
+  assert.equal(ids.fresh('presentation', 'sldMasterId'), '2147483648');
+  assert.equal(ids.fresh('presentation', 'sldLayoutId'), '2147483649'); // one space for masters and layouts
+  ids.reserve('presentation', 'sldLayoutId', '2147483655');
+  assert.equal(ids.fresh('presentation', 'sldMasterId'), '2147483656');
+  ids.reserve('presentation', 'sldId', '2147483647');
+  assert.equal(ids.fresh('presentation', 'sldId'), '257');
+  ids.reserve('lexical', 'shape', '+001');
+  assert.equal(ids.fresh('lexical', 'shape'), '2');
+  assert.equal(ids.key('pkg', 'lexical', 'shape', '01'), ids.key('pkg', 'lexical', 'shape', '1'));
+});
+
+test('fragments retain lexical XML, default namespaces, QName values and inner prefix rebinding', () => {
+  const source = `<root xmlns="urn:outer" xmlns:mc="${N.mc}" xmlns:q="urn:outer-q" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" mc:Ignorable="q" xml:space="preserve"><node><!--keep--><q:data xmlns:q='urn:inner' xsi:type='q:Type' q:unusual='yes'> <![CDATA[a < b]]> </q:data></node></root>`;
+  const el = kid(K.parse(source), 'node'), raw = K.raw(el), normalized = K.serialize(el);
+  assert.match(raw, /<!--keep-->/); assert.match(raw, /<!\[CDATA\[a < b\]\]>/); assert.match(raw, /xmlns:q='urn:inner'/);
+  assert.match(raw, /xml:space="preserve"/); assert.match(raw, /mc:Ignorable="q"/);
+  for (const value of [raw, normalized]) {
+    const node = K.parse(value); assert.equal(node.namespaceURI, 'urn:outer'); assert.equal(node.children[0].namespaceURI, 'urn:inner');
+    assert.equal(node.children[0].lookupNamespaceURI('q'), 'urn:inner');
+  }
+});
+
+test('AlternateContent is captured before inner wrappers collapse, once per outer record', () => {
+  const xml = `<root xmlns:mc="${N.mc}" xmlns:wps="urn:wps" xmlns:new="urn:new"><mc:AlternateContent><mc:Choice Requires="wps"><one/><mc:AlternateContent><mc:Choice Requires="new"><new:thing/></mc:Choice><mc:Fallback><two/></mc:Fallback></mc:AlternateContent></mc:Choice><mc:Fallback><fallback/></mc:Fallback></mc:AlternateContent><mc:AlternateContent><mc:Fallback/></mc:AlternateContent></root>`;
+  const tree = K.parse(xml); L.dml.resolveAC(tree.parentNode, xml);
+  const a = K.alternate(tree.children[0]), b = K.alternate(tree.children[1]);
+  assert.equal(a.id, b.id); assert.match(a.xml, /new:thing/); assert.match(a.xml, /<fallback\/>/);
+  assert.equal(K.alternates(tree).length, 2); // includes the empty alternate for the reader's anchor
+  assert.deepEqual(tree.children.map(c => c.localName), ['one', 'two']);
+});
+
+test('relationships and all definitions/referrers share one identity map through duplicate and undo JSON', async () => {
+  const part = 'ppt/slides/slide1.xml';
+  const xml = `<p:sld xmlns:p="${N.p}" xmlns:a="${N.a}" xmlns:r="${N.rel}"><p:cNvPr id="100"/><p:grpSp><p:cNvPr id="8"/><p:pic><p:cNvPr id="9"/><a:blip r:embed="rId20" r:link="url"/></p:pic><p:cTn id="15"/><p:tn val="15"/><p:spTgt spid="9"/><a:stCxn id="100"/></p:grpSp></p:sld>`;
+  const p = await pkg({ [part]: xml, 'ppt/media/video.bin': new Uint8Array([1, 2, 3]), [K.relsPath(part)]: rels(rel('rId20', 'urn:media/video', '../media/video.bin') + rel('url', N.rel + '/hyperlink', 'https://example.invalid/', true)) });
+  const original = K.fragment(kid(K.parse(xml), 'grpSp'), { pkg: p, part });
+  const fragment = JSON.parse(JSON.stringify(original)), w = new K.Writer(p);
+  w.claim(part); w.put(part, xml, 'application/xml');
+  const unchanged = w.emit(fragment, part); assert.match(unchanged, /id="8"/); assert.match(unchanged, /r:embed="rId20"/);
+  const copy = K.duplicate({ fragment }).fragment, changed = K.parse(w.emit(copy, part));
+  const get = name => changed.getElementsByTagName('*').filter(e => e.localName === name);
+  const shapeIds = get('cNvPr').map(e => e.getAttribute('id'));
+  assert.deepEqual(shapeIds, ['101', '102']);
+  assert.equal(get('spTgt')[0].getAttribute('spid'), '102');
+  assert.equal(get('stCxn')[0].getAttribute('id'), '100'); // external connector target was not duplicated
+  assert.equal(get('cTn')[0].getAttribute('id'), get('tn')[0].getAttribute('val'));
+  assert.notEqual(get('cTn')[0].getAttribute('id'), '15');
+  assert.deepEqual(w.parts.get('ppt/media/video.bin'), new Uint8Array([1, 2, 3]));
+  const again = w.emit(JSON.parse(JSON.stringify(copy)), part); assert.equal(again, K.serialize(changed));
+});
+
+test('multiple models from one alternate emit the original choice and fallback exactly once', async () => {
+  const xml = `<root xmlns:mc="${N.mc}" xmlns:new="urn:new"><mc:AlternateContent><mc:Choice Requires="new"><new:media/></mc:Choice><mc:Fallback><a/><b/></mc:Fallback></mc:AlternateContent></root>`;
+  const p = await pkg({ 'content.xml': xml }), tree = K.parse(xml); L.dml.resolveAC(tree.parentNode, xml);
+  const w = new K.Writer(p), fragments = tree.children.map(e => K.fragment(e, { pkg: p, part: 'content.xml' }));
+  assert.match(w.emit(fragments[0], 'content.xml'), /new:media/);
+  assert.equal(w.emit(fragments[1], 'content.xml'), '');
+  const copies = K.duplicate(fragments);
+  assert.match(w.emit(copies[0], 'content.xml'), /new:media/); assert.equal(w.emit(copies[1], 'content.xml'), '');
+});
+
+test('foreign dependency graphs are transported as bytes and renamed without collisions', async () => {
+  const p = await pkg({ 'media1.bin': new Uint8Array([1]) });
+  const source = await pkg({ 'media1.bin': new Uint8Array([2]), 'metadata.xml': '<x/>', '_rels/metadata.xml.rels': rels(rel('original', 'urn:binary', 'media1.bin')) });
+  const bundle = JSON.parse(JSON.stringify(K.export([{ source: source.id, part: 'metadata.xml' }]))), imported = K.import(bundle)[source.id];
+  const w = new K.Writer(p); w.carry(p, 'media1.bin'); w.carry(imported, 'metadata.xml');
+  const result = w.finish(); assert.equal(result.dropped.length, 0);
+  assert.deepEqual(w.parts.get('media1.bin'), new Uint8Array([1])); assert.deepEqual(w.parts.get('media2.bin'), new Uint8Array([2]));
+  assert.match(text(w.parts.get('_rels/metadata.xml.rels')), /Id="original"[^>]+Target="media2.bin"/);
+  assert.equal(w.types.get('media2.bin'), 'application/octet-stream');
+});
+
+test('foreign fragment references are rebased with their bytes and dangling copied targets are reported', async () => {
+  const xml = `<p:pic xmlns:p="${N.p}" xmlns:a="${N.a}" xmlns:r="${N.rel}"><p:cNvPr id="7"/><a:blip r:embed="rId1"/></p:pic>`;
+  const source = await pkg({ 'shape.xml': xml, 'image.bin': new Uint8Array([8]), '_rels/shape.xml.rels': rels(rel('rId1', N.rel + '/image', 'image.bin')) });
+  const f = K.fragment(K.parse(xml), { pkg: source, part: 'shape.xml' });
+  const mapping = K.import(K.export([{ source: source.id, part: 'image.bin' }]));
+  const rebased = K.remapSources(K.duplicate(f), mapping), dest = await pkg({ 'main.xml': '<x/>' }), w = new K.Writer(dest);
+  const out = w.emit(rebased, 'main.xml'); assert.match(out, /r:embed="rId1"/); assert.deepEqual(w.parts.get('image.bin'), new Uint8Array([8]));
+  const dangling = K.fragment(K.parse(`<p:cxnSp xmlns:p="${N.p}" xmlns:a="${N.a}"><p:cNvPr id="3"/><a:stCxn id="7"/></p:cxnSp>`), { pkg: source, part: 'shape.xml' });
+  assert.throws(() => w.emit(K.duplicate(dangling), 'main.xml'), /Unresolved copied shape/);
+  assert.equal(K.pendingLosses(w.doc).length, 1);
+});
+
+test('the loss ledger acknowledges each entry independently and reports invalidated signatures', async () => {
+  const p = await pkg({ 'main.xml': '<main/>', 'signature.xml': '<signature/>', '_rels/.rels': rels(rel('doc', N.rel + '/officeDocument', 'main.xml') + rel('sig', N.pkg + '/digital-signature/origin', 'signature.xml')) });
+  const doc = {}, w = new K.Writer(p, { doc }); w.carryRels(p, '', ''); w.finish();
+  assert.ok(doc.losses.some(e => e.id.startsWith('signature:'))); assert.ok(!w.parts.has('signature.xml'));
+  K.acknowledge(doc, K.pendingLosses(doc)); assert.equal(K.pendingLosses(doc).length, 0);
+  K.loss(doc, { id: 'new', what: 'Edited opaque content', where: 'slide 1', action: 'conversion' });
+  assert.equal(K.pendingLosses(doc).length, 1);
+  K.acknowledge(doc, K.pendingLosses(doc)); K.loss(doc, { id: 'new', what: 'Deleted opaque content', where: 'slide 1', action: 'drop' });
+  assert.equal(K.pendingLosses(doc).length, 1);
+  K.attach(doc, p); assert.equal(JSON.parse(JSON.stringify(doc)).pkg, undefined); assert.equal(doc.pkg, p);
+});
+
+test('the checker shows only notify entries; audit catch-alls stay recorded for the drivers', async () => {
+  const p = await pkg({ 'main.xml': '<main/>', 'orphan.xml': '<provenance/>', 'gone.xml': '<payload/>', 'signature.xml': '<signature/>',
+    '_rels/.rels': rels(rel('doc', N.rel + '/officeDocument', 'main.xml') + rel('sig', N.pkg + '/digital-signature/origin', 'signature.xml')) });
+  const doc = {}, w = new K.Writer(p, { doc }); w.carryRels(p, '', '');
+  w.omit('gone.xml', 'Removed with the object the user deleted.');
+  w.finish();
+  const orphan = doc.losses.find(e => e.id.startsWith('orphan:'));
+  assert.equal(orphan?.where, 'orphan.xml'); assert.equal(orphan.notify, false);
+  assert.equal(doc.losses.find(e => e.where === 'gone.xml').notify, false, 'omit is silent unless asked');
+  assert.deepEqual(K.noticeLosses(doc).map(e => e.id.split(':')[0]), ['signature']);
+  assert.match(K.noticeLosses(doc)[0].what, /^The digital signature will be removed/);
+  const next = new K.Writer(p, { doc: {} }); next.omit('gone.xml', 'Pivot table saved as plain cells.', { notify: true, place: 'Sheet1: Pivot1' });
+  assert.deepEqual(K.noticeLosses(next.doc).map(e => [e.what, e.place]), [['Pivot table saved as plain cells.', 'Sheet1: Pivot1']]);
+  // An object whose part the original already lacked was broken before the save: writers record it silently
+  const broken = await pkg({ 'main.xml': `<main xmlns:r="${N.rel}" r:embed="rId1"/>`, '_rels/main.xml.rels': rels(rel('rId1', N.rel + '/image', 'media/absent.png')) });
+  const error = (() => { try { new K.Writer(broken, { doc: {} }).carry(broken, 'main.xml'); } catch (e) { return e; } })();
+  assert.ok(K.sourceMissing(error), String(error)); assert.ok(!K.sourceMissing(new Error('Cannot preserve main.xml: deleted dependency')));
+});
+
+test('save losses are recomputed without clearing reader or edit losses and their acknowledgements', () => {
+  const doc = {};
+  K.loss(doc, { id: 'edited', what: 'The user replaced an unsupported object.', action: 'conversion' });
+  const first = new K.Writer(null, { doc });
+  first.loss({ id: 'macro', what: 'The selected format does not support macros.', action: 'drop' });
+  K.acknowledge(doc, K.pendingLosses(doc));
+  new K.Writer(null, { doc });
+  assert.deepEqual(doc.losses.map(e => e.id), ['edited']);
+  assert.deepEqual(K.pendingLosses(doc), []);
+  const next = new K.Writer(null, { doc });
+  next.loss({ id: 'new', what: 'A new object cannot be saved.', action: 'drop' });
+  assert.deepEqual(K.pendingLosses(doc).map(e => e.id), ['new']);
+});
+
+test('property bags keep lexical unknown values, types and IDs while owned entries change', () => {
+  const xml = '<Properties xmlns="urn:p"><property name="int" pid="7"><i4>12</i4></property><!--retained--><property name="text" pid="14"><s>old</s></property><unknown flag=\'yes\'/></Properties>';
+  const out = K.mergeBag(xml, { text: '<property name="text" pid="14"><s>new</s></property>', added: '<property name="added" pid="15"><b>true</b></property>' }, e => e.getAttribute('name'));
+  assert.equal(out, xml.replace('<s>old</s>', '<s>new</s>').replace('</Properties>', '<property name="added" pid="15"><b>true</b></property></Properties>'));
+  assert.equal(K.mergeBag('<Properties xmlns="urn:p"/>', { x: '<child/>' }), '<Properties xmlns="urn:p"><child/></Properties>');
+  assert.equal(K.relationshipType(N.strictRel + '/extendedProperties'), N.rel + '/extended-properties');
+  assert.equal(K.relationshipType(N.strictRel + '/customProperties'), N.rel + '/custom-properties');
+  assert.equal(K.relationshipType('urn:vendor/customProperties'), 'urn:vendor/customProperties');
+  const a = K.attributes('<settings foo="foo" other=\'untouched\'><unknown/></settings>', { foo: null, added: '1' });
+  assert.equal(a, '<settings  other=\'untouched\' added="1"><unknown/></settings>');
+  assert.equal(K.attributes('<settings a=\'old\'/>', { a: 'new' }), '<settings a=\'new\'/>');
+});
+
+test('schema merge replaces just the changed property and keeps extensions at their original anchor', () => {
+  const untouched = `<w:settings xmlns:w="${N.w}"><w:zoom/><w:view/><w:vendor/></w:settings>`;
+  assert.equal(K.merge(untouched, {}, 'w:CT_Settings'), untouched);
+  const xml = `<a:spPr xmlns:a="${N.a}" xmlns:v="urn:vendor"><a:xfrm/><v:unknown flag="yes"/><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><!--kept--><a:effectLst><a:glow rad="12700"/></a:effectLst><a:sp3d/></a:spPr>`;
+  const out = K.merge(xml, { ['{' + N.a + '}solidFill']: [], ['{' + N.a + '}noFill']: '<a:noFill/>' }, 'a:CT_ShapeProperties');
+  assert.deepEqual(children(out), ['xfrm', 'unknown', 'noFill', 'effectLst', 'sp3d']);
+  assert.match(out, /<!--kept-->/); assert.match(out, /glow rad="12700"/); assert.match(out, /flag="yes"/);
+  const effect = `<a:effectLst xmlns:a="${N.a}"><a:glow rad="3"/><a:outerShdw blurRad="4"/><a:reflection blurRad="5"/></a:effectLst>`;
+  const replaced = K.merge(effect, { ['{' + N.a + '}outerShdw']: '<a:outerShdw blurRad="99"/>' }, 'a:CT_EffectList');
+  assert.match(replaced, /glow rad="3"/); assert.match(replaced, /reflection blurRad="5"/); assert.match(replaced, /blurRad="99"/);
+});
+
+test('geometry edits change the outer group transform without rewriting child geometry or effects', () => {
+  const xml = `<p:grpSp xmlns:p="${N.p}" xmlns:a="${N.a}"><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="254000"/><a:chOff x="33" y="44"/><a:chExt cx="55" cy="66"/></a:xfrm></p:grpSpPr><p:sp><p:spPr><a:xfrm><a:off x="1" y="2"/><a:ext cx="3" cy="4"/></a:xfrm><a:glow rad="70"/></p:spPr></p:sp></p:grpSp>`;
+  const changed = K.setBox(xml, { x: 3, y: 4, w: 20, h: 40 });
+  assert.equal(changed, xml.replace('x="0" y="0"', 'x="38100" y="50800"').replace('cx="127000" cy="254000"', 'cx="254000" cy="508000"'));
+  assert.equal(K.getBox(changed).x, 3); assert.equal(K.getBox(changed).w, 20);
+  assert.throws(() => K.setBox(xml, { w: NaN }), /Invalid box/);
+});
+
+test('moving a 3-D frame keeps model coordinates; ink has its own outer transform', () => {
+  const inner = '<am3d:model3d xmlns:am3d="http://schemas.microsoft.com/office/drawing/2017/model3d"><am3d:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="300" cy="400"/></a:xfrm></am3d:spPr></am3d:model3d>';
+  const xml = `<p:graphicFrame xmlns:p="${N.p}" xmlns:a="${N.a}"><p:xfrm><a:off x="12700" y="25400"/><a:ext cx="38100" cy="50800"/></p:xfrm><a:graphic><a:graphicData>${inner}</a:graphicData></a:graphic></p:graphicFrame>`;
+  const changed = K.setBox(xml, { x: 10, y: 20, w: 30, h: 40 });
+  assert.ok(changed.includes(inner)); assert.equal(K.getBox(changed).x, 10);
+  const ink = `<p:contentPart xmlns:p="${N.p}" xmlns:a="${N.a}" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main"><p14:xfrm><a:off x="12700" y="25400"/><a:ext cx="38100" cy="50800"/></p14:xfrm></p:contentPart>`;
+  assert.equal(K.getBox(K.setBox(ink, { x: 5 })).x, 5);
+});
+test('OLE preview identities are owned by the related VML part', () => {
+  const f = K.fragment(K.parse(`<p:oleObj xmlns:p="${N.p}" spid="_x0000_s1030"/>`), { part: 'ppt/slides/slide1.xml' });
+  assert.deepEqual(f.ids, []); assert.match(f.xml, /spid="_x0000_s1030"/);
+});
+
+test('editing a Strict property replaces it once and retains Strict namespace and sibling effects', () => {
+  const ns = 'http://purl.oclc.org/ooxml/drawingml/main';
+  const xml = `<a:effectLst xmlns:a="${ns}"><a:glow rad="3"/><a:outerShdw blurRad="4"/><a:reflection blurRad="5"/></a:effectLst>`;
+  const out = K.merge(xml, { ['{' + N.a + '}outerShdw']: `<a:outerShdw xmlns:a="${N.a}" blurRad="99"/>` }, 'a:CT_EffectList');
+  const nodes = K.parse(out).children;
+  assert.deepEqual(nodes.map(e => e.localName), ['glow', 'outerShdw', 'reflection']);
+  assert.ok(nodes.every(e => e.namespaceURI === ns));
+  assert.equal(nodes[1].getAttribute('blurRad'), '99');
+  assert.match(out, /glow rad="3"/); assert.match(out, /reflection blurRad="5"/);
+});
+
+test('all Office variants retain their distinct main content type and macro-enabled MIME', async () => {
+  assert.equal(Object.keys(K.formats).length, 14);
+  assert.equal(new Set(Object.values(K.formats).map(f => f.contentType)).size, 14);
+  for (const [extension, info] of Object.entries(K.formats)) {
+    const p = await pkg({ 'main.xml': '<main/>', '_rels/.rels': rels(rel('main', N.rel + '/officeDocument', 'main.xml')),
+      '[Content_Types].xml': types.replace('</Types>', `<Override PartName="/main.xml" ContentType="${info.contentType}"/></Types>`) });
+    assert.equal(K.variant(p), extension);
+    assert.equal(K.format({ pkg: p }, null, 'docx').ext, extension);
+    assert.equal(info.macro, extension.endsWith('m'));
+    assert.equal(info.mime.includes('macroEnabled.12'), info.macro);
+    assert.equal(K.format({ pkg: p }, 'xlsx', 'docx').ext, 'xlsx');
+  }
+  assert.equal(K.formats.dotm.contentType, 'application/vnd.ms-word.template.macroEnabledTemplate.main+xml');
+});
+
+test('Word anchor position and extent update while wrapping and picture offsets survive', () => {
+  const wp = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
+  const xml = `<wp:anchor xmlns:wp="${wp}" xmlns:a="${N.a}"><wp:positionH relativeFrom="page"><wp:align>center</wp:align></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>12700</wp:posOffset></wp:positionV><wp:extent cx="25400" cy="38100"/><wp:wrapSquare wrapText="bothSides"/><a:xfrm><a:off x="0" y="0"/><a:ext cx="25400" cy="38100"/></a:xfrm></wp:anchor>`;
+  const out = K.setBox(xml, { x: 9, y: 10, w: 11, h: 12 });
+  assert.match(out, /<wp:posOffset>114300<\/wp:posOffset>/); assert.match(out, /<wp:posOffset>127000<\/wp:posOffset>/);
+  assert.match(out, /wrapText="bothSides"/); assert.match(out, /a:off x="0" y="0"/);
+  assert.equal(K.getBox(out).h, 12);
+});
+
+test('spreadsheet anchors and VML fractional cell anchors update without changing payloads', () => {
+  const ns = K.KNOWN_NS.xdr;
+  const xml = `<xdr:twoCellAnchor xmlns:xdr="${ns}"><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:clientData fLocksWithSheet="1"/></xdr:twoCellAnchor>`;
+  const out = K.setBox(xml, { from: { r: 5, cOff: 2 } }); assert.equal(K.getBox(out).from.r, 5); assert.equal(K.getBox(out).from.cOff, 2); assert.match(out, /fLocksWithSheet="1"/);
+  const vml = `<v:shape xmlns:v="${K.KNOWN_NS.v}" xmlns:x="${K.KNOWN_NS.x}" style="position:absolute;margin-left:2pt;top:3pt;width:4pt;height:5pt;z-index:7"><x:ClientData ObjectType="Button"><x:Anchor>0,0,1,0,2,0,3,0</x:Anchor></x:ClientData></v:shape>`;
+  const moved = K.setBox(vml, { x: 10, w: 6, from: { c: 2, r: 5, cFraction: 0.5, rFraction: 0.25 } });
+  assert.match(moved, /margin-left:10pt/); assert.match(moved, /width:6pt/); assert.match(moved, /z-index:7/); assert.match(moved, /2, 512, 5, 64, 2, 0, 3, 0/);
+});
+
+test('part URI resolution handles relative, absolute and escaped names without escaping the package', () => {
+  assert.deepEqual(K.resolve('ppt/slides/slide1.xml', '../media/a%20b.bin#sample'), { part: 'ppt/media/a b.bin', fragment: '#sample' });
+  assert.equal(K.relative('ppt/slides/slide1.xml', 'ppt/media/a b.bin'), '../media/a%20b.bin');
+  assert.deepEqual(K.resolve('ppt/slides/slide1.xml', '/customXml/item.xml'), { part: 'customXml/item.xml', fragment: '' });
+  assert.throws(() => K.resolve('', '../../outside'), /escapes/);
+  assert.throws(() => K.resolve('a.xml', 'https://example.invalid/'), /Invalid internal/);
+});
+
+test('escaped ZIP entry names and relationship URIs share one logical part identity', async () => {
+  const p = await pkg({ 'a.xml': '<a/>', 'media/Cort%C3%A1zar%20one.bin': new Uint8Array([7, 8]),
+    '_rels/.rels': rels(rel('rId1', N.rel + '/officeDocument', 'a.xml')),
+    '_rels/a.xml.rels': rels(rel('rId2', N.rel + '/audio', 'media/Cort%C3%A1zar%20one.bin')) });
+  assert.ok(p.has('media/Cortázar one.bin'));
+  const w = new K.Writer(p); w.carryRels(p, '', ''); const result = w.finish();
+  assert.ok(result.files.some(f => f.name === 'media/Cort%C3%A1zar%20one.bin'));
+  const saved = await K.open(new Uint8Array(await (await L.zip.write(result.files)).arrayBuffer()));
+  assert.deepEqual(saved.bytes('media/Cortázar one.bin'), new Uint8Array([7, 8]));
+  assert.equal(saved.rels('a.xml')[0].part, 'media/Cortázar one.bin');
+});
+
+test('a preset shape writes all of its adjustment values or none', () => {
+  // PowerPoint repaired a deck whose rounded callout listed adj1 and adj2 but not adj3
+  assert.equal(K.presetAdjust('wedgeRoundRectCallout', { adj1: -62000, adj2: 48000 }),
+    '<a:gd name="adj1" fmla="val -62000"/><a:gd name="adj2" fmla="val 48000"/><a:gd name="adj3" fmla="val 16667"/>');
+  assert.equal(K.presetAdjust('wedgeRoundRectCallout', {}), '');
+  assert.equal(K.presetAdjust('rect', undefined), '');
+  assert.equal(K.presetAdjust('roundRect', { adj: 30000.4, bogus: 1 }), '<a:gd name="adj" fmla="val 30000"/>');
+  assert.equal(K.presetAdjust('notAPreset', { a: 1 }), '<a:gd name="a" fmla="val 1"/>');
+});
+
+const reopen = async result => K.open(new Uint8Array(await (await L.zip.write(result.files)).arrayBuffer()));
+
+test('part names compare case-insensitively: a relationship finds a part stored in another case', async () => {
+  // Word's templates name docProps/thumbnail.jpeg while their ZIP holds docProps/Thumbnail.jpeg
+  const p = await pkg({ 'main.xml': '<main/>', 'docProps/Thumbnail.bin': new Uint8Array([1, 2]),
+    '_rels/.rels': rels(rel('rId1', N.rel + '/officeDocument', 'main.xml') + rel('rId2', N.pkg + '/metadata/thumbnail', 'docProps/thumbnail.bin')) });
+  assert.equal(p.rels('').find(r => r.id === 'rId2').part, 'docProps/Thumbnail.bin');
+  const doc = {}, w = new K.Writer(p, { doc }); w.carryRels(p, '', ''); const result = w.finish();
+  assert.deepEqual(result.dropped, []);
+  const saved = await reopen(result);
+  assert.deepEqual(saved.bytes(saved.rels('').find(r => r.id === 'rId2').part), new Uint8Array([1, 2]));
+});
+
+test('a relationship to a part the original lacks costs only that relationship, unless the markup needs it', async () => {
+  const C = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
+  const chart = `<c:chartSpace xmlns:c="${C}" xmlns:r="${N.rel}"><c:chart/><c:externalData r:id="rId1"><c:autoUpdate val="0"/></c:externalData><c:userShapes r:id="rId2"/></c:chartSpace>`;
+  const p = await pkg({ 'main.xml': '<main/>', 'glossary.xml': '<glossary/>', 'chart.xml': chart, 'shapes.xml': '<shapes/>',
+    'theme.xml': `<theme xmlns:r="${N.rel}"><blip r:embed="rId1"/></theme>`, 'picture.xml': `<picture xmlns:r="${N.rel}"><blip r:embed="rId1"/></picture>`,
+    '_rels/.rels': rels(rel('rId1', N.rel + '/officeDocument', 'main.xml')),
+    '_rels/main.xml.rels': rels(rel('rId1', N.rel + '/glossaryDocument', 'glossary.xml') + rel('rId2', N.rel + '/chart', 'chart.xml') + rel('rId3', N.rel + '/theme', 'theme.xml')),
+    '_rels/glossary.xml.rels': rels(rel('rId1', N.rel + '/webSettings', 'webSettings.xml')),
+    '_rels/chart.xml.rels': rels(rel('rId1', N.rel + '/package', 'embeddings/book.xlsx') + rel('rId2', N.rel + '/chartUserShapes', 'shapes.xml')),
+    '_rels/theme.xml.rels': rels(rel('rId1', N.rel + '/image', 'NULL')),
+    '_rels/picture.xml.rels': rels(rel('rId1', N.rel + '/image', 'media/absent.png')) });
+  const doc = {}, w = new K.Writer(p, { doc }); w.carryRels(p, '', ''); const result = w.finish();
+  const saved = await reopen(result);
+  // a glossary keeps its building blocks; only its relationship to the missing web settings goes
+  assert.equal(text(saved.bytes('glossary.xml')), '<glossary/>'); assert.deepEqual(saved.rels('glossary.xml'), []);
+  // a chart keeps its formatting and user shapes; only the link to its missing workbook goes
+  assert.doesNotMatch(text(saved.bytes('chart.xml')), /externalData|autoUpdate/);
+  assert.match(text(saved.bytes('chart.xml')), /<c:userShapes r:id="rId2"\/>/);
+  assert.deepEqual(saved.rels('chart.xml').map(r => r.part), ['shapes.xml']);
+  // Office writes Target="NULL" for an image that isn't there (Excel 2007 templates' themes); so do we
+  assert.equal(text(saved.bytes('theme.xml')), text(p.bytes('theme.xml'))); assert.equal(saved.rels('theme.xml')[0].target, 'NULL');
+  assert.deepEqual(result.dropped.map(e => [e.id.split(':')[0], e.where, e.notify]), [['dangling', 'glossary.xml', false], ['dangling', 'chart.xml', false], ['orphan', 'picture.xml', false]]);
+  // markup that names a missing part still can't be carried as it is
+  const error = (() => { try { new K.Writer(p, { doc: {} }).carry(p, 'picture.xml'); } catch (e) { return e; } })();
+  assert.ok(K.sourceMissing(error), String(error));
+});
+
+test('the signature notice accounts for the signature parts', async () => {
+  const p = await pkg({ 'main.xml': '<main/>', 'sigs/origin.bin': new Uint8Array(0), 'sigs/sig1.xml': '<Signature/>',
+    '_rels/.rels': rels(rel('rId1', N.rel + '/officeDocument', 'main.xml') + rel('rId2', N.pkg + '/digital-signature/origin', 'sigs/origin.bin')),
+    'sigs/_rels/origin.bin.rels': rels(rel('rId1', N.pkg + '/digital-signature/signature', 'sig1.xml')) });
+  const doc = {}, w = new K.Writer(p, { doc }); w.carryRels(p, '', ''); w.finish();
+  assert.deepEqual(doc.losses.map(e => e.id.split(':')[0]), ['signature']);
+});
+
+test('the audit tells a part the original used from one it never reached', async () => {
+  const p = await pkg({ 'main.xml': '<main/>', 'used.xml': '<used/>', 'orphan.xml': '<orphan/>', 'unnamed.bin': new Uint8Array([1]),
+    '_rels/.rels': rels(rel('rId1', N.rel + '/officeDocument', 'main.xml')),
+    // the custom XML part is reached by its type; the picture's relationship is one main.xml never names
+    '_rels/main.xml.rels': rels(rel('rId1', N.rel + '/customXml', 'used.xml') + rel('rId2', N.rel + '/image', 'unnamed.bin')) });
+  const doc = {}, w = new K.Writer(p, { doc }); w.claim('main.xml'); w.put('main.xml', '<main/>', 'application/xml'); w.finish();
+  assert.deepEqual(Object.fromEntries(doc.losses.map(e => [e.where, [e.id.split(':')[0], e.notify]])),
+    { 'used.xml': ['unreferenced', false], 'orphan.xml': ['orphan', false], 'unnamed.bin': ['orphan', false] });
+});

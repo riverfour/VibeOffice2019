@@ -1,0 +1,61 @@
+# The host_* commands (src/host.rs, src/doc.rs) each kind of window may call, granted in capabilities/. With these
+# defined, Tauri refuses any of our commands a window's capability doesn't grant, and every Tauri core command, which
+# no capability grants (docs/desktop.md, Host interface).
+
+[[permission]]
+identifier = "start-center"
+description = "The Start Center: Open File, Recent Files (the one window that lists them, their unsaved changes too), a dropped file, app windows, the settings (the UI size, the look, the language), the update page"
+commands.allow = [
+  "host_open",
+  "host_open_recent",
+  "host_new_document",
+  "host_recent",
+  "host_recent_preview",
+  "host_recent_remove",
+  "host_recent_clear",
+  "host_discard_draft",
+  "host_new_window",
+  "host_open_url",
+  "host_set_setting",
+]
+
+[[permission]]
+identifier = "app-window"
+description = "Quire, Ledger and Lectern: the window's document, its draft and preview, saving it (Save, Save As, exports, previous versions), File > Open into the window, the Start Center for Recent Files, the Window menu, closing, the licences page (About), the settings"
+commands.allow = [
+  "host_document",
+  "host_document_bytes",
+  "host_open",
+  "host_reopen",
+  "host_show_recent",
+  "host_new_document",
+  "host_set_preview",
+  "host_set_draft",
+  "host_clear_draft",
+  "host_windows",
+  "host_focus",
+  "host_closing",
+  "host_save",
+  "host_allow_access",
+  "host_choose",
+  "host_write_chosen",
+  "host_cancel_choice",
+  "host_versions",
+  "host_open_version",
+  "host_new_window",
+  "host_close_window",
+  "host_set_setting",
+]
+
+[[permission]]
+identifier = "lite"
+description = "The lite edition's one window (src/lite.rs): the documents in ~/VibeOffice/Documents, opening one or a new one in the window, back to the start page, the licences page, quitting, Lectern's slide show on HDMI"
+commands.allow = [
+  "host_lite_list",
+  "host_lite_open",
+  "host_lite_new",
+  "host_lite_home",
+  "host_lite_licenses",
+  "host_lite_quit",
+  "host_lite_show",
+]

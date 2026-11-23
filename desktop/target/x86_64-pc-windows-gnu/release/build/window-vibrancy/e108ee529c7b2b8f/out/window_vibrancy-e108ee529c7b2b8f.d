@@ -1,0 +1,9 @@
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/window-vibrancy/e108ee529c7b2b8f/out/window_vibrancy-e108ee529c7b2b8f.d: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/macos/mod.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/windows.rs
+
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/window-vibrancy/e108ee529c7b2b8f/out/libwindow_vibrancy-e108ee529c7b2b8f.rlib: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/macos/mod.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/windows.rs
+
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/window-vibrancy/e108ee529c7b2b8f/out/libwindow_vibrancy-e108ee529c7b2b8f.rmeta: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/macos/mod.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/windows.rs
+
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/lib.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/macos/mod.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/window-vibrancy-0.8.1/src/windows.rs:

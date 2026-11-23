@@ -1,0 +1,98 @@
+[package]
+name = "vibeoffice"
+version = "0.1.0"
+description = "VibeOffice for Windows and macOS: the suite in public/ in a native window"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Default features minus dynamic-acl: the capabilities are fixed when the app is built (capabilities/, permissions/).
+tauri = { version = "2", default-features = false, features = ["wry", "compression", "common-controls-v6"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# ~/.vibeoffice (src/store.rs): Recent Files are named by the sha256 of a file's path, or of random bytes for a
+# document never saved. Both are in Tauri's crate tree already.
+sha2 = "0.10"
+getrandom = "0.3"
+
+# The system's Open and Save dialogs and questions (src/dialog.rs); Linux uses GTK's own chooser
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+rfd = { version = "0.17", default-features = false, features = ["common-controls-v6"] }
+
+# The Open and Save dialogs on Linux (src/dialog.rs): GTK's native chooser, the version Tauri uses
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+gtk = "0.18"
+# The lite edition's web view settings (src/lite.rs): the version wry uses
+webkit2gtk = { version = "2.0", optional = true }
+# The lite edition on the CardputerZero (src/cardputer.rs): its keyboard handed to cage as a virtual keyboard and
+# pointer, over a Wayland connection of its own (pure Rust, no libwayland)
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols-misc = { version = "0.3", features = ["client"], optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+libc = { version = "0.2", optional = true }
+
+# ShellExecuteW for links; the installation (src/installation.rs, src/installed.rs, setup/): registry,
+# shortcuts, the uninstall dialog, taskbar pinning. Already built for Tauri, so this adds little.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "UI_Shell",
+    "Win32_Foundation",
+    "Win32_Storage_EnhancedStorage",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Controls",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# The taskbar pin request's answer (what windows' IAsyncOperation is)
+windows-future = "0.3"
+# One VibeOffice per user session: a second start hands its files to the running one (Tauri's own plugin)
+tauri-plugin-single-instance = "2.5.3"
+# The network rules (src/net.rs): WebView2's request filter (the version wry uses)
+webview2-com = "0.39"
+
+# macOS: links and Finder through NSWorkspace (the sandbox starts no programs), the edition from Info.plist,
+# NSAlert when the network rules can't be set (src/net.rs), Recent Files' bookmarks (src/doc.rs).
+# Tauri's wry and tao already build these; only the classes used are switched on.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSData", "NSError", "NSFileManager", "NSPathUtilities", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSWorkspace"] }
+# The network rules (src/net.rs): WebKit's content rule list
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "WKContentRuleList", "WKContentRuleListStore", "WKUserContentController"] }
+
+[features]
+# Embed public/ in the exe. `--no-default-features` loads devUrl (tools/serve.py) instead.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+# The lite edition (docs/desktop.md, Lite edition): one window, documents in ~/VibeOffice/Documents, nothing else kept;
+# built for the CardputerZero (cardputer/)
+lite = ["dep:webkit2gtk", "dep:wayland-client", "dep:wayland-protocols-misc", "dep:wayland-protocols-wlr", "dep:libc"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# setup/: the Windows installer, carrying this app (build.sh)
+[workspace]
+members = [".", "setup"]
+
+# no MPL code in what ships (AGENTS.md, Code from other projects): dirs-sys's option-ext (MPL-2.0) is replaced by our
+# own crate with the one method it uses
+[patch.crates-io]
+option-ext = { path = "patches/option-ext" }

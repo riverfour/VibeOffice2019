@@ -1,0 +1,10 @@
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-unknown-linux-gnu/release/build/walkdir/ac604a54aebbdabd/out/walkdir-ac604a54aebbdabd.d: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/dent.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/error.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/util.rs
+
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-unknown-linux-gnu/release/build/walkdir/ac604a54aebbdabd/out/libwalkdir-ac604a54aebbdabd.rlib: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/dent.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/error.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/util.rs
+
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-unknown-linux-gnu/release/build/walkdir/ac604a54aebbdabd/out/libwalkdir-ac604a54aebbdabd.rmeta: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/dent.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/error.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/util.rs
+
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/lib.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/dent.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/error.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/walkdir-2.5.0/src/util.rs:

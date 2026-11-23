@@ -1,0 +1,772 @@
+"""Independent OOXML package checks (Python XML/ZIP, not the application's readers).
+
+check FILE...; compare ORIGINAL SAVED [--policy POLICY.json]
+Policy: {parts: {originalName: {target, mode: opaque|merged|regenerated,
+         allow: [expanded-name ElementTree paths]}}, removed: [names], expectedSlides: N}
+Allow paths apply to both versions. An allowed attribute uses path/@{namespace}name.
+There are no implicit loss allowances. Output is JSONL, and failures exit nonzero.
+"""
+import argparse
+from collections import Counter, defaultdict
+import copy
+import hashlib
+import io
+import json
+from pathlib import Path
+import posixpath
+import re
+import sys
+from urllib.parse import unquote, urlsplit
+import xml.etree.ElementTree as ET
+import zipfile
+
+R = {'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+     'http://purl.oclc.org/ooxml/officeDocument/relationships'}
+MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
+PKG = 'http://schemas.openxmlformats.org/package/2006/relationships'
+CT = 'http://schemas.openxmlformats.org/package/2006/content-types'
+W = {'http://schemas.openxmlformats.org/wordprocessingml/2006/main', 'http://purl.oclc.org/ooxml/wordprocessingml/main'}
+P = {'http://schemas.openxmlformats.org/presentationml/2006/main', 'http://purl.oclc.org/ooxml/presentationml/main'}
+A = {'http://schemas.openxmlformats.org/drawingml/2006/main', 'http://purl.oclc.org/ooxml/drawingml/main'}
+S = {'http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'http://purl.oclc.org/ooxml/spreadsheetml/main'}
+W14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
+V = 'urn:schemas-microsoft-com:vml'
+DGM = 'http://schemas.openxmlformats.org/drawingml/2006/diagram'
+LEGACY_COMMENTS = '{http://schemas.microsoft.com/office/word/2010/11/wordml}commentsEx'
+MODERN_COMMENTS = '{http://schemas.microsoft.com/office/word/2012/wordml}commentsEx'
+# each preset shape's adjustment names, from the generated schema facts the apps use
+_ORDER = (Path(__file__).resolve().parents[2] / 'public/common/opc-order.js').read_text()
+PRESET_ADJUST = {k: [n for n, _ in v] for k, v in json.loads(_ORDER[_ORDER.index('= {') + 2:_ORDER.rindex('; })')]).get('presetAdjust', {}).items()}
+# each built-in worksheet function's fewest operands (Apache POI's table, as the Excel 97-2003 importer uses it); the
+# BIFF maxima don't bind OOXML
+_FUNCTIONS = (Path(__file__).resolve().parents[2] / 'public/common/legacy/xls-functions.js').read_text()
+FUNCTION_MIN = {name: low for name, low, _ in json.loads(_FUNCTIONS[_FUNCTIONS.index('freeze({') + 7:_FUNCTIONS.index('});', _FUNCTIONS.index('freeze({')) + 1]).values()}
+
+# DrawingML's automatic numbering schemes (ECMA-376 dml-main.xsd, ST_TextAutonumberScheme)
+AUTONUM = set('''alphaLcParenBoth alphaUcParenBoth alphaLcParenR alphaUcParenR alphaLcPeriod alphaUcPeriod arabicParenBoth
+arabicParenR arabicPeriod arabicPlain romanLcParenBoth romanUcParenBoth romanLcParenR romanUcParenR romanLcPeriod romanUcPeriod
+circleNumDbPlain circleNumWdBlackPlain circleNumWdWhitePlain arabicDbPeriod arabicDbPlain ea1ChsPeriod ea1ChsPlain ea1ChtPeriod
+ea1ChtPlain ea1JpnChsDbPeriod ea1JpnKorPlain ea1JpnKorPeriod arabic1Minus arabic2Minus hebrew2Minus thaiAlphaPeriod
+thaiAlphaParenR thaiAlphaParenBoth thaiNumPeriod thaiNumParenR thaiNumParenBoth hindiAlphaPeriod hindiNumPeriod
+hindiNumParenR hindiAlpha1Period'''.split())
+EXTENDED = {'http://schemas.openxmlformats.org/officeDocument/2006/extended-properties', 'http://purl.oclc.org/ooxml/officeDocument/extendedProperties'}
+
+
+def in_range(value, low, high):
+    return value is not None and re.fullmatch(r'[+-]?\d+', value.strip()) is not None and low <= int(value) <= high
+
+
+TABLE_URI = ('http://schemas.openxmlformats.org/drawingml/2006/table', 'http://purl.oclc.org/ooxml/drawingml/table')
+
+
+def name_fault(name):
+    """why Excel refuses a defined name, or None (I24 C3: Office controls; a name that merely looks like a cell, such as
+    C1244, opens and is not flagged)"""
+    if not name or len(name.encode('utf-16-le')) // 2 > 255:
+        return 'length'
+    if name.upper() in ('TRUE', 'FALSE', 'R', 'C', 'RC'):
+        return 'reserved'
+    m = re.match(r'([RrCc])(\d+)\D', name)  # C1244_suffix; C000_V opens (0 is no index)
+    if m and 1 <= int(m.group(2)) <= (1048576 if m.group(1) in 'Rr' else 16384):
+        return 'R1C1 index followed by other characters'
+    for i, ch in enumerate(name):
+        o = ord(ch)
+        if o < 0x20 or 0x7f <= o <= 0x9f or ch in '\u00a6\u00a9\u00bb':
+            return f'character U+{o:04X}'
+        if o < 0x80 and not (ch.isalpha() or ch in '_\\' or (i and (ch.isdigit() or ch in '.?'))):
+            return f'character {ch!r}' + (' first' if i == 0 else '')
+    return None
+
+
+def bare_reference(formula):
+    """a name defined as nothing but an A1 cell or area with no sheet qualifier and no bang (V200, $B$2:$C$3), which
+    Office refuses (I24 C3; MS-OE376 3.2.3.1.4). A reference inside a longer expression isn't flagged: LibreOffice
+    writes SUM(OFFSET($B$1,...)) and that case wasn't measured."""
+    def cell(m):
+        col = 0
+        for c in m.group(1).upper():
+            col = col * 26 + ord(c) - 64
+        return col <= 16384 and 1 <= int(m.group(2)) <= 1048576
+    text = formula.strip()
+    parts = text.split(':')
+    if len(parts) > 2:
+        return None
+    for part in parts:
+        m = re.fullmatch(r'\$?([A-Za-z]{1,3})\$?(\d+)', part.strip())
+        if not m or not cell(m):
+            return None
+    return text
+
+
+def short_calls(formula):
+    """(name, operands, needed) for each call of a built-in with fewer operands than it needs: strings, quoted
+    sheet names, array constants and structured references are skipped, so their commas don't count"""
+    out, frames, i, n = [], [], 0, len(formula)
+    while i < n:
+        ch = formula[i]
+        if ch in '"\'':
+            j = i + 1
+            while j < n and not (formula[j] == ch and (j + 1 >= n or formula[j + 1] != ch)):
+                j += 2 if formula[j] == ch else 1
+            if frames:
+                frames[-1][2] = True
+            i = j + 1
+            continue
+        if ch in '{[':
+            close, depth, j = '}' if ch == '{' else ']', 0, i
+            while j < n:
+                depth += formula[j] == ch
+                depth -= formula[j] == close
+                j += 1
+                if not depth:
+                    break
+            if frames:
+                frames[-1][2] = True
+            i = j
+            continue
+        if ch == '(':
+            m = re.search(r'([A-Za-z_][A-Za-z0-9_.]*)$', formula[:i])
+            name = re.sub(r'(?i)^_(?:xlfn|xll|xlws)\.', '', m.group(1)).upper() if m else None
+            frames.append([name, 0, False])
+        elif ch == ')' and frames:
+            name, commas, content = frames.pop()
+            operands = commas + 1 if commas or content else 0
+            if name in FUNCTION_MIN and operands < FUNCTION_MIN[name]:
+                out.append((name, operands, FUNCTION_MIN[name]))
+            if frames:
+                frames[-1][2] = True
+        elif ch == ',' and frames:
+            frames[-1][1] += 1
+        elif not ch.isspace() and frames:
+            frames[-1][2] = True
+        i += 1
+    return out
+
+def split(tag):
+    if tag.startswith('{'):
+        return tuple(tag[1:].split('}', 1))
+    return '', tag
+
+def at(el, name, default=None):
+    return next((v for k, v in el.attrib.items() if split(k)[1] == name), default)
+
+def added_issues(original, saved):
+    """Match the same diagnostic after a Strict/Transitional namespace change.
+
+    Keep part names, code, detail and multiplicity significant. For duplicate IDs,
+    the identity and its scope matter; adding a preceding run must not turn the
+    same malformed original identity into a new diagnostic.
+    The actual saved diagnostic is returned, without normalizing the evidence.
+    """
+    def key(issue):
+        item = dict(issue)
+        if 'path' in item:
+            item['path'] = re.sub(r'\{http://purl\.oclc\.org/ooxml/(officeDocument|wordprocessingml|drawingml|spreadsheetml|presentationml|schemaLibrary)/', r'{http://schemas.openxmlformats.org/\1/2006/', item['path'])
+            if item.get('code', '').startswith('duplicate-') and item['code'].endswith('-id'):
+                del item['path']
+        return json.dumps(item, sort_keys=True)
+    remaining = Counter(key(i) for i in original)
+    added = []
+    for issue in saved:
+        k = key(issue)
+        if remaining[k]: remaining[k] -= 1
+        else: added.append(issue)
+    return added
+
+def conversion_issues(original, saved):
+    """Office-found incompatibilities requiring comparison with the source."""
+    issues = []
+    for part, root in original.xml.items():
+        if root.tag == LEGACY_COMMENTS and part in saved.xml and saved.xml[part].tag == MODERN_COMMENTS:
+            issues.append(dict(code='promoted-comment-extension', part=part, path='',
+                               detail='Pre-release comment metadata was promoted to the released namespace. Word repairs this conversion; retain its source vocabulary.'))
+    return issues
+
+def rels_owner(name):
+    if name == '_rels/.rels':
+        return ''
+    folder, base = posixpath.split(name)
+    if posixpath.basename(folder) != '_rels' or not base.endswith('.rels'):
+        raise ValueError('Invalid relationship part name: ' + name)
+    return posixpath.join(posixpath.dirname(folder), base[:-5])
+
+def target_of(owner, target):
+    u = urlsplit(target)
+    if u.scheme or u.netloc or u.query:
+        raise ValueError('Internal relationship target is not a part URI: ' + target)
+    path = unquote(u.path)
+    name = owner if not path else posixpath.normpath(path.lstrip('/') if path.startswith('/') else posixpath.join(posixpath.dirname(owner), path))
+    if name.startswith('../') or name in ('..', '.', '') or '\\' in name:
+        raise ValueError('Internal target escapes the package: ' + target)
+    return name
+
+def walk(root):
+    """Every branch, retaining which alternatives are mutually exclusive."""
+    def rec(el, path, alternatives):
+        yield el, path, alternatives
+        counts = Counter()
+        for child in el:
+            counts[child.tag] += 1
+            cp = f'{path}/{child.tag}[{counts[child.tag]}]'
+            branches = alternatives
+            if el.tag == '{' + MC + '}AlternateContent' and split(child.tag)[1] in ('Choice', 'Fallback'):
+                branches = dict(alternatives, **{path: cp})
+            yield from rec(child, cp, branches)
+    yield from rec(root, '/' + root.tag + '[1]', {})
+
+def compatible(a, b):
+    return all(k not in b or b[k] == v for k, v in a.items())
+
+def parse_xml(data):
+    # ElementTree expands element/attribute names, but not QName-valued MC attributes.
+    # Expand those values while namespace declarations are still available.
+    scopes, pending = [], []
+    iterator = ET.iterparse(io.BytesIO(data), events=('start-ns', 'start', 'end'))
+    for event, value in iterator:
+        if event == 'start-ns':
+            pending.append(value)
+        elif event == 'start':
+            scope = dict(scopes[-1]) if scopes else {'xml': 'http://www.w3.org/XML/1998/namespace'}
+            scope.update(pending); pending = []; scopes.append(scope)
+            for key, val in list(value.attrib.items()):
+                ns, name = split(key)
+                if ns == MC or (value.tag == '{' + MC + '}Choice' and name == 'Requires') or key == '{http://www.w3.org/2001/XMLSchema-instance}type':
+                    def expanded(token):
+                        prefix, colon, local = token.partition(':')
+                        uri = scope.get(prefix)
+                        if uri is None:
+                            raise ET.ParseError('Undeclared prefix in ' + key + ': ' + prefix)
+                        return '{' + uri + '}' + (local if colon else '')
+                    value.set(key, ' '.join(expanded(t) for t in val.split()))
+        else:
+            scopes.pop()
+    return iterator.root
+
+class Package:
+    def __init__(self, file):
+        self.file = str(file)
+        self.issues = []
+        self.data, self.xml, self.rels, self.types = {}, {}, {}, {}
+        with zipfile.ZipFile(file) as z:
+            for info in z.infolist():
+                if info.is_dir():
+                    continue
+                n = unquote(info.filename)
+                if n in self.data:
+                    self.issue('duplicate-part', n)
+                if n.startswith('/') or posixpath.normpath(n) != n or n.startswith('../'):
+                    self.issue('invalid-part-name', n)
+                self.data[n] = z.read(info)
+        for n, data in self.data.items():
+            if n.endswith(('.xml', '.rels', '.vml')):
+                try:
+                    # Office's VML wraps definitions in conditional markers (<![if gte mso 9]> ... <![endif]>)
+                    self.xml[n] = parse_xml(re.sub(rb'<!\[(?:if [^\]]*|endif)\]>', b'', data) if n.endswith('.vml') else data)
+                except ET.ParseError as e:
+                    self.issue('invalid-xml', n, str(e))
+        cts = self.xml.get('[Content_Types].xml')
+        if cts is None:
+            self.issue('missing-content-types', '[Content_Types].xml')
+        defaults, overrides = {}, {}
+        for c in cts if cts is not None else []:
+            if c.tag == '{' + CT + '}Default':
+                key = c.get('Extension', '').lower()
+                if key in defaults:
+                    self.issue('duplicate-content-type', '[Content_Types].xml', key)
+                defaults[key] = c.get('ContentType')
+            elif c.tag == '{' + CT + '}Override':
+                key = unquote(c.get('PartName', '').lstrip('/'))
+                if key in overrides:
+                    self.issue('duplicate-content-type', '[Content_Types].xml', key)
+                overrides[key] = c.get('ContentType')
+                if key not in self.data:
+                    self.issue('missing-override-target', '[Content_Types].xml', key)
+        for n in self.data:
+            if n == '[Content_Types].xml':
+                continue
+            self.types[n] = overrides.get(n, defaults.get(n.rsplit('.', 1)[-1].lower()))
+            if not self.types[n]:
+                self.issue('missing-content-type', n)
+        for n, root in self.xml.items():
+            if not n.endswith('.rels'):
+                continue
+            try:
+                owner = rels_owner(n)
+            except ValueError as e:
+                self.issue('invalid-rels-name', n, str(e)); continue
+            if owner and owner not in self.data:
+                self.issue('missing-rels-owner', n, owner)
+            rels = self.rels.setdefault(owner, {})
+            for rel in root:
+                id_ = rel.get('Id', '')
+                if not id_ or id_ in rels:
+                    self.issue('duplicate-or-empty-rid', n, id_)
+                external = rel.get('TargetMode') == 'External'
+                raw = rel.get('Target', '')
+                try:
+                    target = raw if external else target_of(owner, raw)
+                except ValueError as e:
+                    self.issue('invalid-target', n, str(e)); continue
+                rels[id_] = dict(type=rel.get('Type'), target=target, external=external)
+                if not external and target not in self.data:
+                    self.issue('missing-target', n, target)
+
+    def issue(self, code, part, detail='', path=''):
+        self.issues.append(dict(code=code, part=part, path=path, detail=detail))
+
+    def check(self):
+        definitions = defaultdict(list)
+        references = []
+        caches = set()
+        pivot_refs = []
+        previews = defaultdict(list)
+        frames, part_targets = set(), []
+        comment_counts = {}
+        for part, root in self.xml.items():
+            if split(root.tag)[0] in W and split(root.tag)[1] == 'comments':
+                comment_counts[part] = Counter(at(c, 'id') for c in root if split(c.tag)[1] == 'comment')
+        main = next((r['target'] for r in self.rels.get('', {}).values() if r['type'].endswith('/officeDocument')), '')
+        word = re.search(r'wordprocessingml\.(document|template)\.main|ms-word\.', self.types.get(main) or '') is not None
+        for part, root in self.xml.items():
+            parents = {child: parent for parent in root.iter() for child in parent}
+            for el, path, branches in walk(root):
+                ns, tag = split(el.tag)
+                parent = parents.get(el)
+                # PowerPoint 2016 refuses a table style list without its required
+                # default, even if every table names an embedded style explicitly.
+                if ns in A and tag == 'tblStyleLst' and 'def' not in el.attrib:
+                    self.issue('table-style-default', part, 'Table style list needs its default style ID (a built-in style need not be embedded).', path)
+                # Excel 2016 refuses a cell's text of more than 32,767 characters (32,768 refused, 32,767
+                # opens; I24 C1): a shared or inline string with its runs joined, phonetic text not
+                # counted, _xHHHH_ decoded once, in UTF-16 units as Excel counts; a formula's cached string too
+                if ns in S and (tag in ('si', 'is') or (tag == 'v' and parent is not None and split(parent.tag)[1] == 'c' and at(parent, 't') == 'str')):
+                    if tag == 'v':
+                        text = el.text or ''
+                    else:
+                        text = ''.join(t.text or '' for t in el.iter() if split(t.tag)[1] == 't' and split(parents.get(t).tag)[1] != 'rPh')
+                    units = len(re.sub(r'_x([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), text).encode('utf-16-le', 'surrogatepass')) // 2
+                    if units > 32767:
+                        self.issue('cell-text-too-long', part, f'{units} characters (Excel opens at most 32,767)', path)
+                # Excel 2016 refuses an external link whose cache set holds no sheet (I24 C2: removing only the
+                # empty element opens the same file)
+                if ns in S and tag == 'sheetDataSet' and not any(split(c.tag)[1] == 'sheetData' for c in el):
+                    self.issue('external-empty-sheet-data-set', part, 'externalBook/sheetDataSet without sheetData', path)
+                # ... and a built-in called with fewer operands than it needs (I24 C2: SUMIF with one, in any case or
+                # prefix; the same call to an unknown name opens)
+                if ns in S and tag in ('f', 'definedName', 'formula', 'formula1', 'formula2') and el.text:
+                    for name, operands, needed in short_calls(el.text):
+                        self.issue('function-missing-operands', part, f'{name} with {operands} of its {needed} required operands', path)
+                # ... a workbook's defined name Excel can't take, and a name defined by a cell of no sheet (Office opens
+                # !V200 and Sheet1!V200, not V200; I24 C3)
+                if ns in S and tag == 'definedName' and (self.types.get(part) or '').endswith('.main+xml'):
+                    fault = name_fault(at(el, 'name') or '')
+                    if fault:
+                        self.issue('defined-name-invalid', part, (at(el, 'name') or '') + ': ' + fault, path)
+                    ref = bare_reference(el.text or '')
+                    if ref:
+                        self.issue('defined-name-current-sheet-reference', part, (at(el, 'name') or '') + ': ' + ref, path)
+                # ... and an Excel 4 macro function (GET.CELL) in a defined name of a workbook that can't hold macros
+                # (I24 C2: removing only that name opens the file)
+                if ns in S and tag == 'definedName' and el.text and 'macroEnabled' not in (self.types.get(part) or '') \
+                        and re.search(r'(?i)(?<![\w.])(?:_xlfn\.)?GET\.CELL\s*\(', el.text):
+                    self.issue('xlm-name-in-plain-workbook', part, (at(el, 'name') or '') + ': GET.CELL', path)
+                # PowerPoint 2016 refuses (I24 D2, each with a control that opens): a DrawingML font's charset or
+                # pitchFamily outside a signed byte (binary Office's 128 is -128 here) ...
+                if ns in A and tag in ('latin', 'ea', 'cs', 'sym', 'buFont'):
+                    for name in ('charset', 'pitchFamily'):
+                        if el.get(name) is not None and not in_range(el.get(name), -128, 127):
+                            self.issue('drawingml-font-byte', part, f'{tag} {name}="{el.get(name)}"', path)
+                # ... a presentation transform's extent past a 32-bit integer ...
+                if ns in A and tag in ('ext', 'chExt') and part.startswith('ppt/') and parent is not None and split(parent.tag)[1] == 'xfrm':
+                    for name in ('cx', 'cy'):
+                        if not in_range(el.get(name), 0, 2147483647):
+                            self.issue('drawingml-transform-extent', part, f'{tag} {name}="{el.get(name)}"', path)
+                # ... an automatic numbering scheme DrawingML doesn't name (POI's arabicParenRight for arabicParenR) ...
+                if ns in A and tag == 'buAutoNum' and el.get('type') not in AUTONUM:
+                    self.issue('drawingml-numbering-scheme', part, f'type="{el.get("type")}"', path)
+                # ... and an editing time past the extended properties' integer
+                if ns in EXTENDED and tag == 'TotalTime' and not in_range(el.text, -2147483648, 2147483647):
+                    self.issue('extended-property-total-time', part, (el.text or '').strip(), path)
+                # Word 2016 offers a converter for a newer version instead of opening a document whose AppVersion
+                # carries a producer build after the dot (11.6568, 12.0999; I24 E2): 12.0300 and 16.0300 open, values
+                # between weren't measured, and Excel and PowerPoint write such minors (16.0300, 15.0033)
+                if ns in EXTENDED and tag == 'AppVersion' and word:
+                    m = re.fullmatch(r'\d{1,2}\.(\d{4})', (el.text or '').strip())
+                    if m and int(m.group(1)) >= 999:
+                        self.issue('word-app-version-build', part, (el.text or '').strip(), path)
+                # What PowerPoint refuses in a converted presentation's drawings (I24 D3, one-object controls): a table
+                # in a graphic frame of another type, a connector with a custom geometry (the same geometry opens on
+                # a shape), a group that is a placeholder ...
+                if ns in A and tag == 'graphicData' and el.find('{' + ns + '}tbl') is not None and el.get('uri') not in TABLE_URI:
+                    self.issue('drawingml-table-uri', part, f'uri="{el.get("uri")}"', path)
+                grand = parents.get(parent) if parent is not None else None
+                if ns in A and tag == 'custGeom' and parent is not None and split(parent.tag)[1] == 'spPr' \
+                        and grand is not None and split(grand.tag)[0] in P and split(grand.tag)[1] == 'cxnSp':
+                    self.issue('presentation-connector-custom-geometry', part, 'a connector with a custom geometry', path)
+                if ns in P and tag == 'ph' and parent is not None and split(parent.tag)[1] == 'nvPr' \
+                        and grand is not None and split(grand.tag)[1] == 'nvGrpSpPr':
+                    self.issue('presentation-group-placeholder', part, f'type="{el.get("type") or "obj"}" idx="{el.get("idx") or 0}"', path)
+                # ... and a slide master's text box with no text body: it opens, but every slide on that master prints
+                # only its background (notes slides with one weren't measured, so they aren't flagged)
+                if ns in P and tag == 'sp' and (self.types.get(part) or '').endswith('slideMaster+xml') \
+                        and el.find('{' + ns + '}txBody') is None:
+                    box = el.find('{' + ns + '}nvSpPr/{' + ns + '}cNvSpPr')
+                    if box is not None and box.get('txBox') in ('1', 'true'):
+                        self.issue('presentation-master-textbox-body', part, 'a text box with no text body', path)
+                if ns in A and tag == 'graphicData' and el.get('uri') == 'urn:vibeoffice:test:unread':
+                    # Batch 7: our unguarded synthetic frame repairs in Office,
+                    # even in its original fixture. Do not reject unfamiliar
+                    # real-world graphic types on this limited evidence.
+                    choice = parent
+                    while choice is not None and choice.tag != '{' + MC + '}Choice':
+                        choice = parents.get(choice)
+                    ac = parents.get(choice)
+                    guarded = (choice is not None and '{urn:vibeoffice:test:unread}' in choice.get('Requires', '').split()
+                               and ac is not None and ac.tag == '{' + MC + '}AlternateContent'
+                               and ac.find('{' + MC + '}Fallback') is not None)
+                    if not guarded:
+                        self.issue('unguarded-test-graphic', part, 'Synthetic graphic type needs an unsupported Choice and a Fallback.', path)
+                if ns in P and tag == 'xfrm' and parent is not None and split(parent.tag) == (ns, 'graphicFrame'):
+                    orientation = [name for name in ('rot', 'flipH', 'flipV') if name in el.attrib]
+                    if orientation:
+                        self.issue('graphic-frame-orientation', part, ', '.join(orientation), path)
+                if ns == W14 and tag in ('noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill'):
+                    if parent is None or parent.tag not in ('{' + W14 + '}textFill', '{' + W14 + '}textOutline'):
+                        self.issue('wordart-fill-outside-property', part, tag, path)
+                if ns in W and tag == 'ins' and parent is not None and parent.tag == '{' + ns + '}del':
+                    self.issue('inserted-inside-deleted', part, 'Word writes the insertion outside the deletion.', path)
+                if ns in S and tag == 'control':
+                    rel = self.rels.get(part, {}).get(at(el, 'id'), {})
+                    if rel.get('type', '').endswith('/control'):
+                        name, shape = at(el, 'name') or '', at(el, 'shapeId')
+                        if not name or not name[0].isalpha() or any(not (c.isalnum() or c == '_') for c in name):
+                            self.issue('activex-control-name', part, name, path)
+                        targets = [r['target'] for r in self.rels.get(part, {}).values() if r['type'].endswith('/vmlDrawing') and not r['external']]
+                        previews_ = [e for target in targets if target in self.xml for e in self.xml[target].iter()
+                                     if split(e.tag)[0] == V and at(e, 'spid') == '_x0000_s' + str(shape)]
+                        if any(at(e, 'id') != name for e in previews_):
+                            self.issue('activex-vml-name', part, name + ' / ' + str(shape), path)
+                for key, val in el.attrib.items():
+                    ans, name = split(key)
+                    if (ans in R or (ans == 'urn:schemas-microsoft-com:office:office' and name == 'relid')) and val and val not in self.rels.get(part, {}):
+                        self.issue('unresolved-rid', part, val, path)
+                scope = part
+                kind = None
+                ident = at(el, 'id')
+                if tag == 'docPr' and 'wordprocessingDrawing' in ns:
+                    kind, scope = 'docPr', 'word'
+                elif tag == 'cNvPr' and 'office/drawing/2008/diagram' not in ns:   # PowerPoint's SmartArt drawing caches use id 0 throughout (41/57 corpus decks)
+                    kind = 'shape'
+                elif tag == 'cTn' and ns in P:
+                    kind = 'timing'
+                elif tag == 'sldId' and ns in P and '/sldIdLst' in path.replace('{' + ns + '}', ''):
+                    kind = 'slide'
+                elif tag in ('sldMasterId', 'sldLayoutId') and ns in P:
+                    # one ID space for every master and layout in the presentation
+                    kind, scope = 'master-layout', 'presentation'
+                elif tag in ('bookmarkStart', 'permStart') and ns in W:
+                    kind = 'bookmark' if tag == 'bookmarkStart' else 'permission'
+                elif tag == 'commentReference' and ns in W:
+                    kind = 'comment-reference'
+                elif tag == 'pivotCache' and ns in S:
+                    id_ = at(el, 'cacheId')
+                    if id_ in caches:
+                        self.issue('duplicate-cache-id', part, id_, path)
+                    caches.add(id_)
+                elif ns == V and tag != 'shapetype' and part.endswith('.vml') and re.fullmatch(r'_x0000_s\d+', ident or ''):
+                    # Excel and PowerPoint drawing parts name each shape once (Word repeats VML ids in its own files);
+                    # Excel's numbered ids are unique across the whole workbook (0 of 951 corpus workbooks repeat
+                    # one; Excel Online writes the placeholder _x0000_s-1 in several parts)
+                    kind = 'vml'
+                    if part.startswith('xl/'):
+                        scope = 'workbook-vml'
+                if kind and ident is not None:
+                    key = (scope, kind, ident)
+                    allowance = 1
+                    if kind == 'comment-reference':
+                        related = list(self.rels.get(part, {}).values()) + list(self.rels.get(main, {}).values())
+                        target = next((r['target'] for r in related if r['type'].endswith('/comments')), '')
+                        # Word accepts the original Comment040 with two matching
+                        # definitions. It repairs our former one-definition save
+                        # with two anchors. Do not blame that accepted source.
+                        allowance = max(1, comment_counts.get(target, {}).get(key[2], 0))
+                    matches = 0
+                    for prior_part, prior_path, prior_branches in definitions[key]:
+                        # Branch paths include a part identifier to avoid conflating unrelated ACs.
+                        both = compatible({part + k: v for k, v in branches.items()}, {prior_part + k: v for k, v in prior_branches.items()})
+                        if both:
+                            matches += 1
+                            if matches >= allowance:
+                                self.issue('duplicate-' + kind + '-id', part, key[2], path)
+                    definitions[key].append((part, path, branches))
+                # PresentationML spid targets cNvPr. VML o:spid is the shape's
+                # own identity, not a reference into DrawingML's ID space.
+                # PowerPoint repairs a preset whose adjustment list is neither empty nor complete
+                if tag == 'prstGeom' and ns in A and at(el, 'prst') in PRESET_ADJUST:
+                    av = next((c for c in el if split(c.tag)[1] == 'avLst'), None)
+                    names = [at(g, 'name') for g in av if split(g.tag)[1] == 'gd'] if av is not None else []
+                    if names and sorted(names) != sorted(PRESET_ADJUST[at(el, 'prst')]):
+                        self.issue('partial-preset-adjust', part, at(el, 'prst') + ': ' + ' '.join(names), path)
+                if ns in P and tag == 'oleObj' and at(el, 'spid') is not None:
+                    # OLE's spid belongs to its related VML preview, not cNvPr.
+                    targets = [r['target'] for r in self.rels.get(part, {}).values() if r['type'].endswith('/vmlDrawing') and not r['external']]
+                    found = any(at(e, 'id') == at(el, 'spid') for target in targets if target in self.xml for e in self.xml[target].iter())
+                    if not found:
+                        self.issue('unresolved-vml-preview', part, at(el, 'spid'), path)
+                    previews[(part, at(el, 'spid'))].append((path, branches))
+                elif ns in P and tag == 'control' and at(el, 'spid') is not None:
+                    # An ActiveX control's spid is the number in its VML shape's o:spid, not a cNvPr.
+                    targets = [r['target'] for r in self.rels.get(part, {}).values() if r['type'].endswith('/vmlDrawing') and not r['external']]
+                    found = any(e.get('{urn:schemas-microsoft-com:office:office}spid') == '_x0000_s' + at(el, 'spid') for target in targets if target in self.xml for e in self.xml[target].iter())
+                    if not found:
+                        self.issue('unresolved-vml-preview', part, at(el, 'spid'), path)
+                elif ns in P and at(el, 'spid') is not None:
+                    references.append((part, 'shape', at(el, 'spid'), path, branches))
+                if tag == 'cNvPr' and parent is not None and split(parent.tag)[1] == 'nvGraphicFramePr' and ns in P:
+                    frames.add((part, at(el, 'id')))
+                # diagram, chart and OLE part animations need their graphic frame
+                if ns in P and (tag == 'spTgt' and any(split(c.tag)[1] in ('graphicEl', 'oleChrtEl', 'subSp') for c in el) or tag in ('bldGraphic', 'bldDgm', 'bldOleChart')):
+                    part_targets.append((part, at(el, 'spid'), path))
+                # PowerPoint finds a SmartArt's layout definition by the data's loTypeId and draws its default
+                # list when the related layout part has another uniqueId (133 of 134 corpus files with SmartArt match; the
+                # other is a LibreOffice bug report sample whose loTypeId is "relationship")
+                if tag == 'relIds' and ns == DGM:
+                    frame_rels = self.rels.get(part, {})
+                    dm, lo = (frame_rels.get(at(el, n), {}).get('target') for n in ('dm', 'lo'))
+                    if dm in self.xml and lo in self.xml:
+                        doc = next((pt for pt in self.xml[dm].iter('{%s}pt' % DGM) if pt.get('type') == 'doc'), None)
+                        pr = doc.find('{%s}prSet' % DGM) if doc is not None else None
+                        lo_type, unique = pr.get('loTypeId') if pr is not None else None, self.xml[lo].get('uniqueId')
+                        if lo_type is not None and lo_type != unique:
+                            self.issue('diagram-layout-id', dm, f'{lo_type} / {unique}', path)
+                        # PowerPoint 2016 draws nothing for a SmartArt whose presentation links (presOf, presParOf) name
+                        # another layout than that uniqueId; later versions draw it. All 233 corpus data parts with such
+                        # links name their own layout
+                        other = sorted({c.get('presId') for c in self.xml[dm].iter('{%s}cxn' % DGM) if c.get('type') in ('presOf', 'presParOf') and c.get('presId') != unique})
+                        if unique is not None and other:
+                            self.issue('diagram-pres-id', dm, f'{other[0]} / {unique}', path)
+                # Word refuses a file whose moved-away text is deletion text ("an incorrect text node"): inside
+                # w:moveFrom, text stays w:t / w:instrText, as in all 50 such runs in the corpus
+                if ns in W and tag in ('delText', 'delInstrText'):
+                    a = parent
+                    while a is not None and not (split(a.tag)[0] in W and split(a.tag)[1] in ('del', 'ins', 'moveFrom', 'moveTo')):
+                        a = parents.get(a)
+                    if a is not None and split(a.tag)[1] == 'moveFrom':
+                        self.issue('moved-deleted-text', part, tag, path)
+                # Word 2016 refuses a styles part with more than 4,092 styles ("Unspecified error" in /word/styles.xml;
+                # 4,092 opens, 4,093 doesn't, in two files); the corpus's largest, fdo76101, has 4,091
+                if tag == 'styles' and ns in W:
+                    count = sum(1 for c in el if split(c.tag) == (split(el.tag)[0], 'style'))
+                    if count > 4092:
+                        self.issue('too-many-styles', part, str(count), path)
+                # PowerPoint rejects a whole SmartArt layout definition (and draws its default list) when the
+                # branches of a choice give one layout node different algorithm types; none of the corpus's
+                # 303 choices in 60 Office definitions do
+                if tag == 'choose' and ns == DGM:
+                    types = {a.get('type') for b in el for a in b if split(a.tag) == (DGM, 'alg')}
+                    if len(types) > 1:
+                        self.issue('diagram-mixed-algorithm', part, ' / '.join(sorted(t or '' for t in types)), path)
+                if tag in ('stCxn', 'endCxn') and ns in A:
+                    references.append((part, 'shape', at(el, 'id'), path, branches))
+                if tag == 'tn' and ns in P:
+                    references.append((part, 'timing', at(el, 'val'), path, branches))
+                if tag in ('bookmarkEnd', 'permEnd') and ns in W:
+                    references.append((part, 'bookmark' if tag == 'bookmarkEnd' else 'permission', at(el, 'id'), path, branches))
+                if tag == 'pivotTableDefinition' and ns in S:
+                    pivot_refs.append((part, at(el, 'cacheId'), path))
+        for scope, kind, val, path, branches in references:
+            if not any(compatible(branches, bs) for _, _, bs in definitions.get((scope, kind, val), [])):
+                self.issue('unresolved-' + kind + '-id', scope, str(val), path)
+        # Excel gives each sheet's VML drawing its own block of 1024 shape ids
+        blocks = defaultdict(list)
+        for part, root in self.xml.items():
+            if part.startswith('xl/') and part.endswith('.vml'):
+                for el in root.iter('{urn:schemas-microsoft-com:office:office}idmap'):
+                    for b in re.split(r'[\s,]+', at(el, 'data') or ''):
+                        if b.isdigit(): blocks[int(b)].append(part)
+        for b, parts in blocks.items():
+            for part in parts[1:]:
+                self.issue('duplicate-vml-block', part, str(b))
+        for part, spid, path in part_targets:
+            if (part, spid) not in frames:
+                self.issue('animation-part-target', part, spid, path)
+        # each embedded object has its own preview shape
+        for (part, spid), uses in previews.items():
+            for i, (path, branches) in enumerate(uses):
+                if any(compatible(branches, bs) for _, bs in uses[:i]):
+                    self.issue('shared-vml-preview', part, spid, path)
+        for part, id_, path in pivot_refs:
+            if id_ not in caches:
+                self.issue('unresolved-cache-id', part, id_, path)
+        # Excel 2016 refuses a sheet comment drawn by DrawingML (a commentPr, even in an AlternateContent branch) whose
+        # shapeId names no shape in the sheet's drawing: universal-content-strict without its drawing's Fallback anchor
+        for sheet, rels in self.rels.items():
+            targets = {r['type'].rsplit('/', 1)[-1]: r['target'] for r in rels.values() if not r['external']}
+            comments = self.xml.get(targets.get('comments'))
+            if comments is None:
+                continue
+            drawing = self.xml.get(targets.get('drawing'))
+            shapes = {el.get('id') for el in drawing.iter() if split(el.tag)[1] == 'cNvPr'} if drawing is not None else set()
+            for c in comments.iter():
+                if split(c.tag) in ((ns, 'comment') for ns in S) and any(split(e.tag)[1] == 'commentPr' for e in c.iter()) and c.get('shapeId') not in shapes:
+                    self.issue('comment-shape', targets['comments'], (c.get('ref') or '') + ' / ' + str(c.get('shapeId')))
+        # Word 2016 refuses a package ("Xml parsing error") whose comment extensions use the released w15 namespace
+        # while another part binds the draft one of Word 2013's preview; each of the corpus's 2,396 Word files uses one
+        for part, root in self.xml.items():
+            if root.tag == '{http://schemas.microsoft.com/office/word/2012/wordml}commentsEx':
+                draft = next((n for n, d in self.data.items() if n != part and b'http://schemas.microsoft.com/office/word/2010/11/wordml' in d), None)
+                if draft:
+                    self.issue('w15-namespaces', part, draft)
+        return self.issues
+
+    def canonical(self, part, root, name_map=None):
+        name_map = name_map or {}
+        def rec(el):
+            attrs = []
+            for k, v in el.attrib.items():
+                ns, name = split(k)
+                if ns in R and v in self.rels.get(part, {}):
+                    r = self.rels[part][v]
+                    v = json.dumps([r['type'], r['external'], name_map.get(r['target'], r['target'])], ensure_ascii=False)
+                attrs.append((k, v))
+            text = el.text or ''
+            if len(el) and not text.strip():
+                text = ''
+            return [el.tag, sorted(attrs), text, [rec(c) + [c.tail if c.tail and c.tail.strip() else ''] for c in el]]
+        return rec(root)
+
+def allowed(root, rules):
+    root = copy.deepcopy(root)
+    for rule in rules:
+        if '/@' in rule:
+            path, attr = rule.rsplit('/@', 1)
+            for el in root.findall(path):
+                el.attrib.pop(attr, None)
+        else:
+            remove = set(root.findall(rule))
+            for parent in root.iter():
+                for child in list(parent):
+                    if child in remove:
+                        parent.remove(child)
+    return root
+
+def semantic(pkg, part, root, name_map):
+    """Ordered paragraph/cell text and properties, independent of run splitting and prefixes."""
+    paragraphs, cells, objects = [], [], []
+    inventory = Counter()
+    for el in root.iter():
+        ns, tag = split(el.tag)
+        if tag in ('sdt', 'object', 'OLEObject', 'control', 'graphicFrame', 'contentPart', 'model3d', 'videoFile', 'audioFile', 'glow', 'reflection', 'softEdge', 'sp3d', 'dataBar', 'ext'):
+            inventory[el.tag] += 1
+        if tag == 'p' and ns in W | A:
+            text = []
+            runs = []
+            for child in el:
+                if split(child.tag)[1] == 'pPr':
+                    continue
+                for t in child.iter():
+                    tns, tn = split(t.tag)
+                    if tns in W | A and tn in ('t', 'delText', 'instrText'):
+                        text.append(t.text or '')
+                    elif tns in W | A and tn in ('tab', 'br', 'cr'):
+                        text.append('\t' if tn == 'tab' else '\n')
+                if split(child.tag)[1] == 'r':
+                    rp = next((r for r in child if split(r.tag)[1] == 'rPr'), None)
+                    prop = pkg.canonical(part, rp, name_map) if rp is not None else None
+                    txt = ''.join(t.text or '' for t in child if split(t.tag)[1] in ('t', 'delText', 'instrText'))
+                    if runs and runs[-1][0] == prop:
+                        runs[-1][1] += txt
+                    else:
+                        runs.append([prop, txt])
+            pp = next((c for c in el if split(c.tag)[1] == 'pPr'), None)
+            paragraphs.append(dict(text=''.join(text), properties=pkg.canonical(part, pp, name_map) if pp is not None else None, runs=runs))
+        elif tag == 'c' and ns in S:
+            cells.append(pkg.canonical(part, el, name_map))
+        elif tag in ('spPr', 'bodyPr', 'tblPr', 'sectPr'):
+            objects.append(pkg.canonical(part, el, name_map))
+    return dict(paragraphs=paragraphs, cells=cells, properties=objects, features=dict(sorted(inventory.items())))
+
+def compare(a, b, policy):
+    differences = []
+    modes = policy.get('parts', {})
+    mapping = {n: spec.get('target', n) for n, spec in modes.items()}
+    removed = set(policy.get('removed', []))
+    summary = Counter()
+    for name, data in a.data.items():
+        if name in removed:
+            continue
+        target = mapping.get(name, name)
+        spec = modes.get(name, {})
+        mode = spec.get('mode', 'opaque')
+        if target not in b.data:
+            differences.append(dict(part=name, what='missing-part')); continue
+        if data == b.data[target]:
+            summary['byteIdentical'] += 1
+            # The same XML can reference different content after its .rels was rewritten.
+            if name in a.xml and target in b.xml and a.canonical(name, a.xml[name], mapping) != b.canonical(target, b.xml[target]):
+                differences.append(dict(part=name, what='relationship-retargeted'))
+            continue
+        if mode not in ('opaque', 'merged', 'regenerated'):
+            raise ValueError('Unknown comparison mode: ' + mode)
+        if mode == 'opaque':
+            differences.append(dict(part=name, what='changed-opaque', original=hashlib.sha256(data).hexdigest(), saved=hashlib.sha256(b.data[target]).hexdigest()))
+        elif name in a.xml and target in b.xml:
+            ar = allowed(a.xml[name], spec.get('allow', []))
+            br = allowed(b.xml[target], spec.get('allow', []))
+            ax = semantic(a, name, ar, mapping) if mode == 'regenerated' else a.canonical(name, ar, mapping)
+            bx = semantic(b, target, br, {}) if mode == 'regenerated' else b.canonical(target, br)
+            if ax != bx:
+                fields = [k for k in ax if ax[k] != bx[k]] if isinstance(ax, dict) else ['xml']
+                differences.append(dict(part=name, what='changed-' + mode, fields=fields))
+            else:
+                summary['equivalent'] += 1
+        else:
+            differences.append(dict(part=name, what='cannot-compare-' + mode))
+    # Relationships are a multiset of edges; changing rIds is allowed only if XML references agree.
+    for owner, rels in a.rels.items():
+        if owner in removed:
+            continue
+        dest = mapping.get(owner, owner)
+        edges = lambda rs, mp: Counter((r['type'], r['external'], mp.get(r['target'], r['target'])) for r in rs.values() if r['target'] not in removed)
+        missing = edges(rels, mapping) - edges(b.rels.get(dest, {}), {})
+        if missing:
+            differences.append(dict(part=owner, what='missing-relationships', edges=[list(e) + [n] for e, n in missing.items()]))
+    if 'expectedSlides' in policy:
+        count = sum(1 for x in b.xml.values() if split(x.tag)[0] in P and split(x.tag)[1] == 'sld')
+        if count != policy['expectedSlides']:
+            differences.append(dict(what='slide-count', expected=policy['expectedSlides'], actual=count))
+    new_issues = added_issues(a.check(), b.check()) + conversion_issues(a, b)
+    return dict(original=a.file, saved=b.file, status='failed' if differences or new_issues else 'ok',
+                summary=dict(summary), differences=differences, newIssues=new_issues)
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=['check', 'compare'])
+    parser.add_argument('files', nargs='+')
+    parser.add_argument('--policy')
+    args = parser.parse_args()
+    failed = False
+    if args.command == 'compare':
+        if len(args.files) != 2:
+            parser.error('compare requires ORIGINAL SAVED')
+        try:
+            policy = json.loads(Path(args.policy).read_text()) if args.policy else {}
+            result = compare(Package(args.files[0]), Package(args.files[1]), policy)
+        except Exception as e:
+            result = dict(files=args.files, status='failed', error=str(e))
+        print(json.dumps(result, ensure_ascii=False))
+        failed = result['status'] != 'ok'
+    else:
+        for file in args.files:
+            try:
+                pkg = Package(file)
+                issues = pkg.check()
+                result = dict(file=file, status='failed' if issues else 'ok', parts=len(pkg.data), issues=issues)
+            except Exception as e:
+                result = dict(file=file, status='failed', error=str(e))
+            failed |= result['status'] != 'ok'
+            print(json.dumps(result, ensure_ascii=False))
+    return int(failed)
+
+if __name__ == '__main__':
+    sys.exit(main())

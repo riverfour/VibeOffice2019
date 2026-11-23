@@ -1,0 +1,9 @@
+cargo:rerun-if-env-changed=VO_PAYLOAD
+cargo:rerun-if-env-changed=VO_VERSION
+cargo:rerun-if-changed=/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/vibeoffice.exe
+cargo:rerun-if-changed=/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/WebView2Loader.dll
+cargo:rustc-env=VO_PAYLOAD=/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release
+cargo:rerun-if-changed=/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/setup/setup.rc
+cargo:rerun-if-changed=/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/setup/setup.manifest
+cargo:rerun-if-changed=/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/setup/../icons/icon.ico
+cargo:rustc-link-arg-bins=/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/vibeoffice-setup/c44a66d2f7a7bc7f/out/setup-res.o

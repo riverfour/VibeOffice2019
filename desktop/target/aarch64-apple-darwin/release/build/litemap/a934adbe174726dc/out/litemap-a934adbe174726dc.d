@@ -1,0 +1,10 @@
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/aarch64-apple-darwin/release/build/litemap/a934adbe174726dc/out/litemap-a934adbe174726dc.d: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/map.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/store/mod.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/store/slice_impl.rs
+
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/aarch64-apple-darwin/release/build/litemap/a934adbe174726dc/out/liblitemap-a934adbe174726dc.rlib: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/map.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/store/mod.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/store/slice_impl.rs
+
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/aarch64-apple-darwin/release/build/litemap/a934adbe174726dc/out/liblitemap-a934adbe174726dc.rmeta: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/map.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/store/mod.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/store/slice_impl.rs
+
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/lib.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/map.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/store/mod.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.3/src/store/slice_impl.rs:

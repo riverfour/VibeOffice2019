@@ -1,0 +1,5 @@
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/release/build/objc2/59c0c0adb5569157/out/build_script_build.d: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-0.6.5/build.rs
+
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/release/build/objc2/59c0c0adb5569157/out/build_script_build: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-0.6.5/build.rs
+
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-0.6.5/build.rs:

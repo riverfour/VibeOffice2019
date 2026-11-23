@@ -1,0 +1,9 @@
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/webview2-com-sys/6406446e23f72efe/out/webview2_com_sys-6406446e23f72efe.d: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/declared_interfaces.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/bindings.rs
+
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/webview2-com-sys/6406446e23f72efe/out/libwebview2_com_sys-6406446e23f72efe.rlib: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/declared_interfaces.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/bindings.rs
+
+/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/webview2-com-sys/6406446e23f72efe/out/libwebview2_com_sys-6406446e23f72efe.rmeta: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/declared_interfaces.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/bindings.rs
+
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/lib.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/declared_interfaces.rs:
+/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/webview2-com-sys-0.39.1/src/bindings.rs:
