@@ -1,0 +1,28 @@
+# Build artifacts
+desktop/target/
+desktop/build/
+desktop/*.dll
+desktop/*.so
+desktop/*.dylib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test outputs
+test-results/
+coverage/
+
+# Temp files
+*.tmp
+*.temp
