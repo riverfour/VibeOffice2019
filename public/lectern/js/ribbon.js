@@ -48,7 +48,7 @@
         { label: 'Customize', items: [{ cmd: 'pageSetup', size: 'large', label: 'Slide Size' }, { cmd: 'background', size: 'large', label: 'Format Background' }] },
       ] },
       { id: 'transitions', label: 'Transitions', groups: [
-        { label: 'Transition to This Slide', items: [{ drop: 'Transition', icon: 'morph', size: 'large', menu: (r) => L.show && L.show.transitionMenu(r) }] },
+        { label: 'Transition to This Slide', items: [{ cmd: 'transitionPane', size: 'large', label: 'Transitions' }, { drop: 'Transition', icon: 'morph', size: 'large', menu: (r) => L.show && L.show.transitionMenu(r) }] },
         { label: 'Timing', items: [{ cmd: 'rehearse', size: 'large', label: 'Rehearse Timings' }] },
       ] },
       { id: 'animations', label: 'Animations', groups: [

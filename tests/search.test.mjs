@@ -18,10 +18,11 @@ const FIRST = {
   },
   ledger: {
     bold: 'bold', image: 'insertPicture', margins: 'pageSetup', freeze: 'freezePanes', sum: 'autoSum',
-    graph: 'insertChart', pdf: 'exportPDF', 'conditional': 'conditionalFormat', hyperlnk: 'hyperlink', sort: 'sortDlg',
+    'bars:graph': 'insertChart', 'ribbon:graph': 'chartWizard',
+    pdf: 'exportPDF', 'conditional': 'conditionalFormat', hyperlnk: 'hyperlink', sort: 'sortDlg',
   },
   lectern: {
-    image: 'insertPicture', 'bars:present': 'showFromStart', 'ribbon:present': 'showFromStart', pdf: 'saveAs', 'new slide': 'newSlide',
+    image: 'insertPicture', 'bars:present': 'showFromStart', 'ribbon:present': 'showFromStart', pdf: 'exportPDF', 'new slide': 'newSlide',
     hyperlnk: 'hyperlink', graph: 'insertChart', 'speaker notes': 'speakerNotes', 'notes page': 'viewNotes', options: 'optionsDlg',
     smartart: 'insertDiagram', smart: 'insertDiagram', intelliart: 'insertDiagram', wordart: 'insertWordArt', 'org chart': 'insertDiagram',
   },

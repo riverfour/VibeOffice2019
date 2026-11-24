@@ -229,6 +229,78 @@
   --rule: #d1d1d1; --cell-line: #d1d1d1; --grid-line: #e1e1e1; --grid-line-2: #f0f0f0;
   --sample-line: #d1d1d1; --bd-on: #fff4ce;
 
+  /* Toolbar settings (fallback to ribbon values) */
+  --tb-a: #f3f3f3; --tb-b: #f3f3f3; --tb-c: #f3f3f3; --tb-edge: #d1d1d1;
+  --dock-a: #f3f3f3; --dock-b: #f3f3f3; --tb-border: #d1d1d1; --grip: #d1d1d1; --grip-hi: transparent;
+  --hot-a: #eaeaea; --hot-b: #eaeaea; --hot-border: transparent;
+  --press-a: #d6efff; --press-b: #d6efff;
+  --chk-a: #d6efff; --chk-b: #d6efff;
+  --combo-border: #d1d1d1; --combo-sep: transparent; --hint-ink: #6b6b6b;
+
+  /* Menus */
+  --menu-border: #d1d1d1; --menu-hot: #eaeaea; --menu-open: #eaeaea; --menu-face: #ffffff;
+  --sep-dark: #d1d1d1; --sep-light: transparent;
+  --head-ink: #333333; --head-bg: transparent; --head-line: transparent; --key-ink: #6b6b6b;
+
+  /* Task pane and lists */
+  --pane-a: #f3f3f3; --pane-b: #f3f3f3; --pane-ink: #333333; --pane-link: var(--app-accent, #185abd); --pane-line: #d1d1d1;
+  --box-line: #d1d1d1; --card-line: #d1d1d1; --row-line: #f0f0f0; --group-bg: #f0f0f0;
+  --find-hit: #fff4ce;
+
+  /* Text */
+  --ink: #1f1f1f; --ink-2: #333; --ink-3: #444; --ink-4: #666; --ink-5: #888; --ink-key: #1f1f1f;
+  --muted: #6b6b6b; --dis-ink: #a6a6a6; --dis-ink-2: #999;
+
+  /* Surfaces, selection, grids */
+  --surface: #fff; --canvas: #e6e6e6; --work: #f3f3f3;
+  --check: #0078d4;
+  --sel: #0078d4; --sel-ink: #fff; --sel-line: #005a9e; --sel-soft: #d6efff; --sel-pale: #e8f4fd; --sel-pale-2: #f0f7fc;
+  --rule: #d1d1d1; --cell-line: #d1d1d1; --grid-line: #e1e1e1; --grid-line-2: #f0f0f0; --sample-line: #d1d1d1; --bd-on: #fff4ce;
+  --sheet-grid: #d1d1d1; --sheet-hdr-a: #f3f3f3; --sheet-hdr-b: #eaeaea;
+  /* Status bar */
+  --sb-sep: #d1d1d1; --sb-sep-hi: #eaeaea; --flag-off: #a6a6a6;
+  /* Dialogs and their controls */
+  --dlg: #fafafa; --dlg-ink: #1f1f1f; --field-border: #d1d1d1; --btn-border: #d1d1d1;
+  --btn-a: #fff; --btn-b: #f3f3f3; --btn-hot-b: #eaeaea; --btn-press-a: #eaeaea; --btn-press-b: #eaeaea; --btn-ring: #d1d1d1;
+  --btn-dis-ink: #a6a6a6; --btn-dis-line: #d1d1d1; --btn-dis-bg: #f3f3f3;
+  --tab-a: #fafafa; --tab-b: #eaeaea; --grp-line: #d1d1d1;
+  --spin-line: #d1d1d1; --spin-a: #fafafa; --spin-b: #eaeaea; --spin-ink: #4d6185;
+  /* Overlays and shadows */
+  --overlay: rgba(0,0,0,.08); --busy-veil: rgba(0,0,0,.1); --drop-veil: rgba(0,120,212,.18);
+  --shadow-c: rgba(0,0,0,.15); --dlg-shadow-c: rgba(0,0,0,.2);
+  --tip-bg: #ffffe1; --tip-line: #000; --tip-shadow-c: rgba(0,0,0,.25); --toast-shadow-c: rgba(0,0,0,.3);
+  /* App chrome: sheet tabs, split bars, scroll bars, print preview, dialog previews */
+  --face-2: #f3f3f3; --face-2-line: #d1d1d1; --sheet-tab-edge: #a6a6a6; --scroll-bg: #f3f3f3;
+  --split-hi: #fff; --split-mid: #eaeaea; --split-lo: #d1d1d1; --split-lo-2: #a6a6a6;
+  --preview-canvas: #8c8c8c; --preview-canvas-2: #808080; --preview-line: #919b9c;
+  --grp-line-2: #d1d1d1; --ctl-line: #aca899; --th-bg: #e8eef6; --th-line: #aaa; --col-line: #bbb;
+  --rule-2: #ccc; --cell-line-2: #ddd; --row-line-2: #eee; --swatch-line: #808080;
+  --sel-soft-2: #d6efff; --inverse: #000; --ink-6: #666; --ink-9: #999; --brand-ink: #1f3f7f;
+  --tip-link: #00c; --tip-shadow-2: rgba(0,0,0,.2);
+  --tab-line-2: #7a96c6; --tab2-a: #fdfdfd; --tab2-b: #e8eef9; --ol-ico-bar: #cfdcf3; --dd-line: #556; --sel-ink-2: #dfe8ff;
+  --thumb-line: #a3a3a3; --thumb-on: #3d6ec9; --thumb-sel: #8fb0e6; --page-shadow: #59657c; --preview-canvas-3: #8b96a8;
+  --card-line-2: #c9c9c9; --sample-line-2: #9a9a9a; --ink-7: #777;
+  /* Ledger's row and column headers and cell selection (drawn on a canvas) */
+  --hdr-a: #FFFFFF; --hdr-b: #E4ECF7; --hdr-line: #9EB6CE; --hdr-ink: #000000;
+  --hdr-sel-a: #FFE7A2; --hdr-sel-b: #F8C55E; --hdr-sel-line: #D7A43C; --hdr-all-a: #FFD58D; --hdr-all-b: #F5B54A;
+  --cell-sel: rgba(0, 120, 212, 0.20); --cell-sel-border: #0078d4;
+  /* Start Center and the New dialog */
+  --card-hot-border: #E3A23B; --card-thumb-bg: #f3f6fb; --card-thumb-line: #b8c7df; --start-on-b: #e6eefc; --start-rule: #a9c1ea;
+  --start-line: #c3d3ee; --error-ink: #a3300b; --badge-bg: #fde3c4; --badge-ink: #8a3b00; --rm-bg: rgba(255,255,255,.9);
+  --notice-bg: #eef8f1; --notice-hot: #dcf0e2; --notice-line: #9fcfae; --notice-mark: #1f8a4c; --notice-ink: #14572f;
+  --warn-bg: #fff8d6; --warn-line: #e3c86e; --warn-mark: #c98a00; --warn-ink: #4f3a00;
+  --drop-bg: rgba(214,227,248,.85);
+  /* Ribbon (looks with layout 'ribbon'; common/ribbon.js) */
+  --rb-bg: #f3f3f3; --rb-panel: #ffffff; --rb-line: #d1d1d1; --rb-tab-ink: #333333; --rb-tab-on-ink: var(--app-accent, #185abd); --rb-tab-hot: #eaeaea;
+  --rb-label-ink: #4c5a72; --rb-ctx: #A0620A; --rb-ctx-bg: #FFF4D6; --rb-file-ink: #0B2E7C;
+  /* Rulers */
+  --white: #FFFFFF; --ruler: #FFFFFF; --ruler-off: #eaeaea; --ruler-line: #d1d1d1; --tabsel-line: #d1d1d1;
+  --ruler-mark-bg: #eaeaea; --ruler-mark-line: #d1d1d1;
+  --ruler-tick: #444; --ruler-ink: #222; --ruler-deftab: #777; --ruler-row: #7f95bd; --indent-fill: #e8eef9; --indent-line: #3b5a8c;
+  --ruler-off-2: #eaeaea; --ruler-tick-2: #4b5d7e; --ruler-ink-2: #334;
+  /* Bullet image for lists */
+  --bu-img: none;
+
   /* Ribbon styling */
   --rb-bg: #f3f3f3;
   --rb-panel: #ffffff;
@@ -243,6 +315,9 @@
   --word-accent: #185abd;
   --excel-accent: #107c41;
   --powerpoint-accent: #c43e1c;
+  --quire: #185abd;
+  --ledger: #107c41;
+  --lectern: #c43e1c;
 }
 
 html[data-app="quire"] { --app-accent: var(--word-accent); }
