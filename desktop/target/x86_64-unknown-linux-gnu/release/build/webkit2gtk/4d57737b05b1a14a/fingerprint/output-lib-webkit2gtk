@@ -1,1 +1,0 @@
-{"$message_type":"unused_extern","lint_level":"force-warn","unused_extern_names":["bitflags","gdk_sys","gio_sys","glib_sys","gtk_sys"]}

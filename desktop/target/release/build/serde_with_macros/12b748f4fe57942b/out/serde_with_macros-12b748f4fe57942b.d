@@ -1,8 +1,0 @@
-/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/release/build/serde_with_macros/12b748f4fe57942b/out/serde_with_macros-12b748f4fe57942b.d: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/apply.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/lazy_bool.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/utils.rs
-
-/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/release/build/serde_with_macros/12b748f4fe57942b/out/libserde_with_macros-12b748f4fe57942b.so: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/apply.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/lazy_bool.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/utils.rs
-
-/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/lib.rs:
-/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/apply.rs:
-/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/lazy_bool.rs:
-/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.24.0/src/utils.rs:

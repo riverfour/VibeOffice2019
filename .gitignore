@@ -26,3 +26,6 @@ coverage/
 # Temp files
 *.tmp
 *.temp
+tmp/
+tools/ooxml/__pycache__/
+**/__pycache__/

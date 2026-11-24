@@ -1,8 +1,0 @@
-/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/tauri-plugin-single-instance/a81a95dc816856ad/out/tauri_plugin_single_instance-a81a95dc816856ad.d: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-single-instance-2.5.3/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-single-instance-2.5.3/src/platform_impl/windows.rs
-
-/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/tauri-plugin-single-instance/a81a95dc816856ad/out/libtauri_plugin_single_instance-a81a95dc816856ad.rlib: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-single-instance-2.5.3/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-single-instance-2.5.3/src/platform_impl/windows.rs
-
-/home/qiusong/Projects/development/vibe-office-dev/VibeOffice/desktop/target/x86_64-pc-windows-gnu/release/build/tauri-plugin-single-instance/a81a95dc816856ad/out/libtauri_plugin_single_instance-a81a95dc816856ad.rmeta: /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-single-instance-2.5.3/src/lib.rs /home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-single-instance-2.5.3/src/platform_impl/windows.rs
-
-/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-single-instance-2.5.3/src/lib.rs:
-/home/qiusong/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-single-instance-2.5.3/src/platform_impl/windows.rs:
