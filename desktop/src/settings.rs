@@ -143,7 +143,7 @@ impl Settings {
                 .entry((*key).into())
                 .or_insert_with(|| (*value).into());
         }
-        values.entry(LOOK.into()).or_insert_with(|| "paper".into());
+        values.entry(LOOK.into()).or_insert_with(|| "office2019".into());
         serde_json::to_string(&values).unwrap_or_else(|_| "{}".into())
     }
 
